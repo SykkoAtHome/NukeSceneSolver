@@ -775,6 +775,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                     self._lines[name].setVisible(False)
 
         # 2. Update Standard VP Lines visibility and positions
+        is_3vp = (getattr(self, "_mode", "2vp") == "3vp")
         for name, line in self._lines.items():
             if name.startswith("box_edge_"):
                 continue
@@ -783,7 +784,12 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 continue
             
             # Hide manual VP lines entirely in box mode. Reference line remains editable.
-            if is_box and name in ("vp1_a", "vp1_b", "vp2_a", "vp2_b"):
+            if is_box and name in ("vp1_a", "vp1_b", "vp2_a", "vp2_b", "vp3_a", "vp3_b"):
+                line.setVisible(False)
+                continue
+            
+            # VP3 lines only visible in 3VP mode
+            if name.startswith("vp3") and not is_3vp:
                 line.setVisible(False)
                 continue
 
