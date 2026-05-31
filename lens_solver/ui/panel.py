@@ -122,6 +122,12 @@ class LensSolverPanel(QtWidgets.QWidget):
 
     def _refresh_solution(self, *args) -> SolveResult:
         dimensions = self._plate or PlateInfo(None, "", 1920, 1080, "")
+        
+        # Update canvas labels based on current axis selection
+        axis1 = self._first_axis.currentText()
+        axis2 = self._second_axis.currentText()
+        self._canvas.set_axis_labels(axis1, axis2)
+        
         self._last_result = solve_2vp(
             SolveInput(
                 image_width=dimensions.width,
@@ -129,8 +135,8 @@ class LensSolverPanel(QtWidgets.QWidget):
                 vp1_segments=self._canvas.vp1_segments(),
                 vp2_segments=self._canvas.vp2_segments(),
                 origin=self._canvas.origin(),
-                first_axis=self._first_axis.currentText(),
-                second_axis=self._second_axis.currentText(),
+                first_axis=axis1,
+                second_axis=axis2,
                 sensor_width_mm=self._sensor_width.value(),
                 camera_distance=self._camera_distance.value(),
             )
@@ -147,6 +153,10 @@ class LensSolverPanel(QtWidgets.QWidget):
             self._message.setStyleSheet("color: #c6e6c6;")
         else:
             self._show_error(" ".join(self._last_result.errors))
+            
+        # Draw perspective grid on canvas
+        self._canvas.update_grid(self._last_result)
+        
         return self._last_result
 
     def _create_camera(self) -> None:

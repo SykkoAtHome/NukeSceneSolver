@@ -114,6 +114,9 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
 
         self._handles: dict[str, _HandleItem] = {}
         self._lines: dict[str, QtWidgets.QGraphicsLineItem] = {}
+        self._labels: dict[str, QtWidgets.QGraphicsSimpleTextItem] = {}
+        self._grid_lines: list[QtWidgets.QGraphicsLineItem] = []
+        
         self._create_segment("vp1_a", Point2D(0.12, 0.23), Point2D(0.77, 0.34), "#ff5c5c")
         self._create_segment("vp1_b", Point2D(0.20, 0.70), Point2D(0.95, 0.59), "#ff5c5c")
         self._create_segment("vp2_a", Point2D(0.30, 0.40), Point2D(0.25, 0.14), "#5ca8ff")
@@ -122,6 +125,87 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         
         self._setup_hud()
         self.set_plate(1920, 1080)
+
+    def set_axis_labels(self, axis1: str, axis2: str) -> None:
+        """Update labels to reflect assigned world axes."""
+        for name in ("vp1_a", "vp1_b"):
+            self._labels[name].setText(f"{axis1.strip('+-')} Axis")
+        for name in ("vp2_a", "vp2_b"):
+            self._labels[name].setText(f"{axis2.strip('+-')} Axis")
+        self._update_lines()
+
+    def update_grid(self, result: SolveResult | None) -> None:
+        """Draw a perspective grid on the ground plane if the solve is valid."""
+        # Clear existing grid
+        while self._grid_lines:
+            self._scene.removeItem(self._grid_lines.pop())
+            
+        if not result or not result.ok or not result.projection_matrix:
+            return
+
+        # Simple grid: 10x10 units on the ground plane (Z=0 if Y is up, or Y=0 if Z is up)
+        # We need to know which axis is "up".
+        # For simplicity, let's assume world plane formed by axis1 and axis2.
+        # But wait, core.solver_2vp produces a full projection matrix.
+        # We can just project points [i, j, 0, 1] or similar.
+        
+        # Determine ground plane: the two VP axes form the floor.
+        # Let's project a simple 5x5 grid around origin.
+        # Since we don't have scale yet, 1 unit = 1 "unit".
+        
+        pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 80), 1.0)
+        pen.setCosmetic(True)
+        
+        # 3D points in "ground" coordinates (unit scale)
+        # We use the result's camera_to_world to project.
+        # Actually, we need world_to_camera * projection.
+        # result.projection_matrix is (P @ V) essentially.
+        
+        proj = result.projection_matrix
+        w, h = self._plate_rect.width(), self._plate_rect.height()
+
+        def project(xw: float, yw: float, zw: float) -> QtCore.QPointF | None:
+            # result.projection_matrix.rows is a tuple of tuples
+            p = (xw, yw, zw, 1.0)
+            out = [0.0, 0.0, 0.0, 0.0]
+            for i in range(4):
+                row = proj.rows[i]
+                for j in range(4):
+                    out[i] += row[j] * p[j]
+            
+            if abs(out[3]) < 1e-6: return None
+            
+            # Normalised device coordinates [-1, 1]
+            nx = out[0] / out[3]
+            ny = out[1] / out[3]
+            
+            # Map to scene pixels
+            # ny is inverted in our solver_plane vs UI plane
+            return QtCore.QPointF(
+                self._plate_rect.left() + (nx + 1.0) * 0.5 * w,
+                self._plate_rect.top() + (1.0 - (ny + 1.0) * 0.5) * h
+            )
+
+        # Draw lines for a 10x10 grid
+        steps = 10
+        size = 5.0
+        for i in range(steps + 1):
+            val = -size + (i * size * 2.0 / steps)
+            # Lines along Axis 1
+            p_start = project(val, -size, 0)
+            p_end = project(val, size, 0)
+            if p_start and p_end:
+                line = self._scene.addLine(QtCore.QLineF(p_start, p_end), pen)
+                line.setZValue(0.5)
+                self._grid_lines.append(line)
+                
+            # Lines along Axis 2
+            p_start = project(-size, val, 0)
+            p_end = project(size, val, 0)
+            if p_start and p_end:
+                line = self._scene.addLine(QtCore.QLineF(p_start, p_end), pen)
+                line.setZValue(0.5)
+                self._grid_lines.append(line)
 
     def _setup_hud(self) -> None:
         """Create floating HUD buttons."""
@@ -254,6 +338,19 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         line = self._scene.addLine(QtCore.QLineF(), pen)
         line.setZValue(2.0)
         self._lines[name] = line
+        
+        # Add label
+        label = QtWidgets.QGraphicsSimpleTextItem("?")
+        label.setBrush(QtGui.QBrush(QtGui.QColor(color)))
+        label.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+        label.setZValue(4.0)
+        font = label.font()
+        font.setBold(True)
+        font.setPixelSize(12)
+        label.setFont(font)
+        self._scene.addItem(label)
+        self._labels[name] = label
+        
         self._handles[f"{name}_start"] = self._create_handle(start, color)
         self._handles[f"{name}_end"] = self._create_handle(end, color)
 
@@ -271,6 +368,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         for name, line in self._lines.items():
             start_handle = self._handles[f"{name}_start"]
             end_handle = self._handles[f"{name}_end"]
+            label = self._labels[name]
             
             p1 = start_handle.pos()
             p2 = end_handle.pos()
@@ -279,6 +377,12 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             dx = p2.x() - p1.x()
             dy = p2.y() - p1.y()
             length = (dx*dx + dy*dy)**0.5
+            
+            # Update label position (center of segment)
+            center = QtCore.QPointF(p1.x() + dx * 0.5, p1.y() + dy * 0.5)
+            # Offset label so it's centered on the point
+            rect = label.boundingRect()
+            label.setPos(center.x() - rect.width() * 0.5, center.y() - rect.height() * 0.5)
             
             if length > HANDLE_RADIUS * 2.0:
                 # Offset points by handle radius along the segment direction

@@ -64,6 +64,7 @@ class SolveResult:
 
     camera_to_world_matrix: Matrix4 | None
     world_to_camera_matrix: Matrix4 | None
+    projection_matrix: Matrix4 | None  # Full P = K @ [R|t] projection
     camera_position: Vector3D | None
     relative_focal_length: float | None
     focal_length_mm: float | None
@@ -173,9 +174,23 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             "Camera distance and scene scale are arbitrary until a reference distance is supplied."
         )
 
+        # Build full projection matrix: P = K @ [R|t]
+        # K maps camera-space points [Xc, Yc, Zc] to solver-plane [nx, ny]
+        # Xc / Zc * focal_plane_distance, etc.
+        # Note: focal_plane_distance is defined such that image height is 2.0 (from -1 to 1) 
+        # in the solver coordinate system.
+        k_matrix = Matrix4.from_rows((
+            (focal_plane_distance, 0.0, 0.0, 0.0),
+            (0.0, focal_plane_distance, 0.0, 0.0),
+            (0.0, 0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0, 0.0)
+        ))
+        projection_matrix = k_matrix @ world_to_camera_matrix
+
         return SolveResult(
             camera_to_world_matrix=camera_to_world_matrix,
             world_to_camera_matrix=world_to_camera_matrix,
+            projection_matrix=projection_matrix,
             camera_position=camera_position,
             relative_focal_length=relative_focal_length,
             focal_length_mm=focal_length_mm,
@@ -300,6 +315,7 @@ def _error_result(
     return SolveResult(
         camera_to_world_matrix=None,
         world_to_camera_matrix=None,
+        projection_matrix=None,
         camera_position=None,
         relative_focal_length=None,
         focal_length_mm=None,
