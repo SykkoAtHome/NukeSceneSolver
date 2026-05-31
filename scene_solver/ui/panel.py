@@ -68,7 +68,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
 
         options = QtWidgets.QFormLayout()
         self._mode_combo = QtWidgets.QComboBox()
-        self._mode_combo.addItems(["Lines", "Box", "3VP", "1VP"])
+        self._mode_combo.addItems(["2VP", "Box", "3VP", "1VP"])
         self._first_axis = QtWidgets.QComboBox()
         self._first_axis.addItems(AXES)
         self._second_axis = QtWidgets.QComboBox()
