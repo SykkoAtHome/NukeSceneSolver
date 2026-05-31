@@ -81,6 +81,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._auto_pp = QtWidgets.QCheckBox("Auto Principal Point (3VP only)")
         self._auto_pp.setChecked(True)
         
+        self._use_pp_offset = QtWidgets.QCheckBox("Adjust Principal Point")
+        self._use_pp_offset.setToolTip("Allow the optical center to be off-center (Lens Shift).")
+        self._use_pp_offset.setChecked(False)
+        
         self._sensor_width = QtWidgets.QDoubleSpinBox()
         self._sensor_width.setRange(1.0, 200.0)
         self._sensor_width.setDecimals(3)
@@ -125,6 +129,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         options.addRow("Second VP axis", self._second_axis)
         options.addRow("Third VP axis", self._third_axis)
         options.addRow("", self._auto_pp)
+        options.addRow("", self._use_pp_offset)
 
         sensor_width_row = QtWidgets.QHBoxLayout()
         sensor_width_row.addWidget(self._sensor_width)
@@ -191,6 +196,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._second_axis.currentTextChanged.connect(self._refresh_solution)
         self._third_axis.currentTextChanged.connect(self._refresh_solution)
         self._auto_pp.toggled.connect(self._refresh_solution)
+        self._use_pp_offset.toggled.connect(self._on_pp_offset_toggled)
         self._sensor_width.valueChanged.connect(self._refresh_solution)
         self._focal_length.valueChanged.connect(self._refresh_solution)
         self._camera_distance.valueChanged.connect(self._refresh_solution)
@@ -204,6 +210,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._origin_card_button.clicked.connect(self._create_origin_card)
         self._match_box_button.clicked.connect(self._create_match_box)
         self._focal_length.setEnabled(False)
+        self._on_pp_offset_toggled() # Sync initial state
         self._update_scale_controls()
 
     def _on_mode_changed(self, mode_str: str) -> None:
@@ -212,7 +219,18 @@ class SceneSolverPanel(QtWidgets.QWidget):
         if mode != "box" and self._uses_box_dimension():
             self._scale_mode.setCurrentText(ARBITRARY_SCALE_MODE)
         self._focal_length.setEnabled(mode == "1vp")
+        self._auto_pp.setEnabled(mode == "3vp")
+        self._on_pp_offset_toggled()
         self._update_scale_controls()
+        self._refresh_solution()
+
+    def _on_pp_offset_toggled(self) -> None:
+        mode = self._mode_combo.currentText()
+        show_pp = self._use_pp_offset.isChecked()
+        # 3VP with Auto PP always enables visibility of the PP crosshair
+        if mode == "3VP" and self._auto_pp.isChecked():
+            show_pp = True
+        self._canvas.set_principal_point_visible(show_pp)
         self._refresh_solution()
 
     def _on_scale_mode_changed(self, *args) -> None:
@@ -269,11 +287,17 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._canvas.set_axis_labels(axis1, axis2, axis3)
         self._last_box_dimension = None
 
-        principal_point = self._canvas.principal_point()
-        if self._mode_combo.currentText() == "3VP" and self._auto_pp.isChecked():
-            principal_point = None
-
         mode_str = self._mode_combo.currentText().lower()
+        
+        # Determine Principal Point input
+        principal_point: Point2D | None
+        if mode_str == "3vp" and self._auto_pp.isChecked():
+            principal_point = None # Triggers auto-calculation
+        elif self._use_pp_offset.isChecked():
+            principal_point = self._canvas.principal_point()
+        else:
+            principal_point = DEFAULT_PRINCIPAL_POINT # Force centered
+
         solve_input = SolveInput(
             image_width=dimensions.width,
             image_height=dimensions.height,

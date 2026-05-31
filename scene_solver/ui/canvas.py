@@ -366,6 +366,16 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         if "reference" in self._lines:
             self._lines["reference"].setVisible(visible)
 
+    def set_principal_point_visible(self, visible: bool) -> None:
+        """Show/hide the principal point handle and crosshair."""
+        if "principal_point" in self._handles:
+            self._handles["principal_point"].setVisible(visible)
+        if hasattr(self, "_pp_label"):
+            self._pp_label.setVisible(visible)
+        if hasattr(self, "_pp_lines"):
+            for line in self._pp_lines:
+                line.setVisible(visible)
+
     def _unproject_length(self, ui_point: Point2D, world_axis: Vector3D, result: SolveResult) -> float:
         solver_pt = ui_to_solver(ui_point, result.image_dimensions, result.principal_point_ui)
         focal_plane_dist = result.relative_focal_length / 2.0
