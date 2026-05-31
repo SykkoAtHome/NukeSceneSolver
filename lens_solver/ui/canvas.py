@@ -6,6 +6,7 @@ from collections.abc import Iterable
 
 from PySide2 import QtCore, QtGui, QtWidgets
 
+from lens_solver.core import SolveResult
 from lens_solver.core.models import Point2D, Segment2D
 
 
@@ -129,6 +130,8 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._labels: dict[str, QtWidgets.QGraphicsSimpleTextItem] = {}
         self._grid_lines: list[QtWidgets.QGraphicsLineItem] = []
         self._grid_visible = True
+        self._undo_buffer: dict[str, Point2D] | None = None
+        self._is_internal_update = False
         
         self._create_segment("vp1_a", Point2D(0.12, 0.23), Point2D(0.77, 0.34), "#ff5c5c")
         self._create_segment("vp1_b", Point2D(0.20, 0.70), Point2D(0.95, 0.59), "#ff5c5c")
@@ -156,24 +159,12 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         if not self._grid_visible or not result or not result.ok or not result.projection_matrix:
             return
 
-        # Simple grid: 10x10 units on the ground plane
- (Z=0 if Y is up, or Y=0 if Z is up)
+        # Simple grid: 10x10 units on the ground plane (Z=0 if Y is up, or Y=0 if Z is up)
         # We need to know which axis is "up".
         # For simplicity, let's assume world plane formed by axis1 and axis2.
-        # But wait, core.solver_2vp produces a full projection matrix.
-        # We can just project points [i, j, 0, 1] or similar.
-        
-        # Determine ground plane: the two VP axes form the floor.
-        # Let's project a simple 5x5 grid around origin.
-        # Since we don't have scale yet, 1 unit = 1 "unit".
         
         pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 80), 1.0)
         pen.setCosmetic(True)
-        
-        # 3D points in "ground" coordinates (unit scale)
-        # We use the result's camera_to_world to project.
-        # Actually, we need world_to_camera * projection.
-        # result.projection_matrix is (P @ V) essentially.
         
         proj = result.projection_matrix
         w, h = self._plate_rect.width(), self._plate_rect.height()
@@ -189,18 +180,14 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             
             if abs(out[3]) < 1e-6: return None
             
-            # Normalised device coordinates [-1, 1]
             nx = out[0] / out[3]
             ny = out[1] / out[3]
             
-            # Map to scene pixels
-            # ny is inverted in our solver_plane vs UI plane
             return QtCore.QPointF(
                 self._plate_rect.left() + (nx + 1.0) * 0.5 * w,
                 self._plate_rect.top() + (1.0 - (ny + 1.0) * 0.5) * h
             )
 
-        # Draw lines for a 10x10 grid
         steps = 10
         size = 5.0
         for i in range(steps + 1):
@@ -227,7 +214,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         hud_layout.setContentsMargins(10, 10, 10, 10)
         hud_layout.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignRight)
         
-        style = """
+        self._hud_style = """
             QPushButton {
                 background-color: rgba(45, 45, 45, 180);
                 color: #eeeeee;
@@ -243,24 +230,27 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             QPushButton:pressed {
                 background-color: rgba(30, 30, 30, 255);
             }
+            QPushButton:checked {
+                background-color: rgba(100, 150, 255, 150);
+            }
         """
         
         self._fit_btn = QtWidgets.QPushButton("Fit")
-        self._fit_btn.setStyleSheet(style)
+        self._fit_btn.setStyleSheet(self._hud_style)
         self._fit_btn.clicked.connect(self.fit_view)
         
         self._100_btn = QtWidgets.QPushButton("1:1")
-        self._100_btn.setStyleSheet(style)
+        self._100_btn.setStyleSheet(self._hud_style)
         self._100_btn.clicked.connect(self.reset_zoom)
         
         self._grid_btn = QtWidgets.QPushButton("Grid")
         self._grid_btn.setCheckable(True)
         self._grid_btn.setChecked(True)
-        self._grid_btn.setStyleSheet(style + " QPushButton:checked { background-color: rgba(100, 150, 255, 150); }")
+        self._grid_btn.setStyleSheet(self._hud_style)
         self._grid_btn.clicked.connect(self.toggle_grid)
         
         self._reset_btn = QtWidgets.QPushButton("Reset")
-        self._reset_btn.setStyleSheet(style)
+        self._reset_btn.setStyleSheet(self._hud_style)
         self._reset_btn.clicked.connect(self.reset_handles)
         
         hud_layout.addWidget(self._fit_btn)
@@ -272,18 +262,34 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         """Toggle perspective grid visibility."""
         self._grid_visible = not self._grid_visible
         self._grid_btn.setChecked(self._grid_visible)
-        # We need the last result to redraw, but for now just clear/update
-        # The panel will trigger update_grid on next change, or we can hide existing.
         for line in self._grid_lines:
             line.setVisible(self._grid_visible)
 
     def reset_handles(self) -> None:
-        """Reset all handles to their default relative positions."""
-        for name, pos in DEFAULT_POSITIONS.items():
-            if name == "origin":
-                self._handles["origin"].set_relative_position(pos)
+        """Reset handles to defaults or undo the last reset."""
+        self._is_internal_update = True
+        try:
+            if self._undo_buffer is None:
+                # First click: Store current state and reset to defaults
+                self._undo_buffer = {
+                    name: h.relative_position() for name, h in self._handles.items()
+                }
+                for name, pos in DEFAULT_POSITIONS.items():
+                    self._handles[name].set_relative_position(pos)
+                self._reset_btn.setText("Undo Reset")
+                self._reset_btn.setStyleSheet(
+                    self._hud_style + " QPushButton { color: #ffcc66; }"
+                )
             else:
-                self._handles[name].set_relative_position(pos)
+                # Second click: Restore from buffer
+                for name, pos in self._undo_buffer.items():
+                    self._handles[name].set_relative_position(pos)
+                self._undo_buffer = None
+                self._reset_btn.setText("Reset")
+                self._reset_btn.setStyleSheet(self._hud_style)
+        finally:
+            self._is_internal_update = False
+
         self._update_lines()
         self.changed.emit()
 
@@ -294,7 +300,6 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
     def reset_zoom(self) -> None:
         """Reset zoom to 1:1 pixel ratio."""
         self.resetTransform()
-        # Center the view
         self.centerOn(self._plate_rect.center())
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802 - Qt API name
@@ -333,30 +338,34 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._update_lines()
 
     def set_plate(self, width: int, height: int, pixmap: QtGui.QPixmap | None = None) -> None:
-        relative_positions = {
-            name: handle.relative_position() for name, handle in self._handles.items()
-        }
-        self._plate_rect = QtCore.QRectF(0.0, 0.0, float(width), float(height))
-        self._scene.setSceneRect(self._plate_rect)
-        for name, handle in self._handles.items():
-            handle.set_plate_rect(self._plate_rect)
-            handle.set_relative_position(relative_positions[name])
-        if pixmap is not None and not pixmap.isNull():
-            scaled = pixmap.scaled(
-                width,
-                height,
-                QtCore.Qt.IgnoreAspectRatio,
-                QtCore.Qt.SmoothTransformation,
-            )
-            self._plate_item.setPixmap(scaled)
-            self._placeholder.hide()
-        else:
-            self._plate_item.setPixmap(QtGui.QPixmap())
-            self._placeholder.setPlainText("Plate preview unavailable - handles remain editable")
-            self._placeholder.setPos(width * 0.03, height * 0.05)
-            self._placeholder.show()
-        self._update_lines()
-        self.fit_view()
+        self._is_internal_update = True
+        try:
+            relative_positions = {
+                name: handle.relative_position() for name, handle in self._handles.items()
+            }
+            self._plate_rect = QtCore.QRectF(0.0, 0.0, float(width), float(height))
+            self._scene.setSceneRect(self._plate_rect)
+            for name, handle in self._handles.items():
+                handle.set_plate_rect(self._plate_rect)
+                handle.set_relative_position(relative_positions[name])
+            if pixmap is not None and not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    width,
+                    height,
+                    QtCore.Qt.IgnoreAspectRatio,
+                    QtCore.Qt.SmoothTransformation,
+                )
+                self._plate_item.setPixmap(scaled)
+                self._placeholder.hide()
+            else:
+                self._plate_item.setPixmap(QtGui.QPixmap())
+                self._placeholder.setPlainText("Plate preview unavailable - handles remain editable")
+                self._placeholder.setPos(width * 0.03, height * 0.05)
+                self._placeholder.show()
+            self._update_lines()
+            self.fit_view()
+        finally:
+            self._is_internal_update = False
 
     def vp1_segments(self) -> tuple[Segment2D, Segment2D]:
         return self._segments("vp1_a", "vp1_b")
@@ -406,6 +415,12 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         return handle
 
     def _handle_moved(self) -> None:
+        if not self._is_internal_update and self._undo_buffer is not None:
+            # User moved something after a reset: invalidate undo
+            self._undo_buffer = None
+            self._reset_btn.setText("Reset")
+            self._reset_btn.setStyleSheet(self._hud_style)
+
         self._update_lines()
         self.changed.emit()
 
@@ -430,11 +445,6 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             label.setPos(center.x() - rect.width() * 0.5, center.y() - rect.height() * 0.5)
             
             if length > HANDLE_RADIUS * 2.0:
-                # Offset points by handle radius along the segment direction
-                # Note: We need to account for current view scale if we want
-                # the gap to perfectly match the non-scaling handle circle.
-                # Since handles ignore transformations, HANDLE_RADIUS is in screen pixels.
-                # We need to map screen distance back to scene distance.
                 inv_scale = 1.0 / self.transform().m11()
                 scene_offset = HANDLE_RADIUS * inv_scale
                 
