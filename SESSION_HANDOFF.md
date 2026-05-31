@@ -1,61 +1,191 @@
-# Nuke Lens Solver - session handoff
+# Nuke Lens Solver - project memory
 
 Updated: 2026-05-31
 Workspace: `D:\code\nuke_LensSolver`
+Target: Foundry Nuke `15.1v4`
 
 ## Read first
 
 Read `PRD.md`, `PLAN.md`, and `README.md` before editing.
 
-The project target is **Foundry Nuke 15.1**, not Nuke 16.
-Local installation:
+This repository is an active prototype with tested core geometry and a manually
+validated Nuke workflow. Keep changes narrowly scoped and preserve the
+coordinate conventions below.
+
+Do not launch Nuke automatically while developing or running Python tests.
+Terminal Nuke invocations caused unwanted startup dialogs on this workstation.
+The user runs interactive Nuke checks manually when requested.
+
+## Current commits
+
+Relevant history:
 
 ```text
-C:\Program Files\Nuke15.1v4
-Nuke 15.1v4
-Python 3.10.10
-PySide2 / Qt5
+f43c76d Implement stage 8 scale and Nuke scene export
+6a1ee8f Prepare horizon overlay roadmap and canvas state
+65c2f70 UI: Implement Box Match mode with independent Scene Origin.
+2280a9a UI: Robust initialization and axis-aligned perspective grid.
 ```
 
-Do not describe the current state as a working MVP. It is a tested backend with
-a prototype UI and a runtime-tested EXR preview path. Interactive end-to-end
-validation in the Nuke GUI is still required.
+Local `nuke_files/` contains user-created `.nk` fixtures and rendered images.
+These are source material for ground-truth values, not test dependencies. Keep
+them untracked unless the user explicitly asks to add them.
 
 ## Current implementation
 
 Implemented:
 
-- Git repository initialized locally, but no commits exist yet.
 - `lens_solver.core`:
-  - immutable geometry value types,
-  - guarded line intersection,
-  - vector and matrix operations,
-  - explicit UI/pixel/solver-plane coordinate conversions,
-  - independent pinhole projection helpers,
-  - tested `2VP` solver,
-  - arbitrary-scale camera translation placing the selected image `origin` on
-    world origin.
+  - guarded geometry, vector and matrix operations,
+  - explicit UI, pixel, solver-plane and camera-space conversions,
+  - tested `2VP` pinhole solver,
+  - least-squares vanishing points from multiple segments,
+  - optional reference-distance calibration,
+  - projected cuboid edge extraction and Box Match solve,
+  - coarse axis-aligned match-box reconstruction,
+  - optional base-plane constraint for absolute box placement.
 - `lens_solver.nuke_integration`:
-  - `Camera2` adapter,
+  - `Camera2` create/update adapter,
   - selected `Read` and `Camera2` helpers,
-  - temporary Nuke `Reformat` + `Write` PNG proxy render for EXR previews,
-  - panel registration and menu installation.
+  - EXR preview fallback through temporary Nuke nodes,
+  - independent scene-grid card, origin card and match-box `Cube` helpers.
 - `lens_solver.ui`:
-  - PySide2 `QGraphicsView` canvas,
-  - four draggable VP segments,
-  - draggable origin,
-  - axis selection,
-  - sensor width and camera distance controls,
-  - create/update camera buttons,
-  - direct `QPixmap` plate preview with a Nuke-backed fallback for EXR and
-    other formats unsupported by Qt.
-- Nuke plugin entrypoints:
-  - `init.py`
-  - `menu.py`
+  - dockable PySide2 panel,
+  - editable VP lines and independent Scene Origin,
+  - Box Match wireframe with eight image-space corners,
+  - reference-distance line,
+  - horizon HUD,
+  - helper-node export buttons,
+  - explicit `Match box base offset`.
+
+Stage 8 is in progress: core behavior and helper export exist, while broader
+interactive validation in Nuke is still required.
+
+## Coordinate conventions
+
+These conventions are critical:
+
+- UI points use relative plate coordinates:
+  - top-left: `(0, 0)`
+  - bottom-right: `(1, 1)`
+- Solver-plane origin is the principal point. Solver-plane Y points upward.
+- Matrices are row-major and transform column vectors.
+- Core camera space now matches classic Nuke camera space directly:
+  - local `-Z` points forward,
+  - local `+X` points right,
+  - local `+Y` points up.
+- `CORE_TO_NUKE_CAMERA_BASIS` is identity.
+- Nuke world up is `+Y`.
+- Default Nuke ground plane is `X/Z`.
+- The panel therefore defaults to first axis `+X`, second axis `+Z`.
+- Scene-grid and origin-card nodes are `Card2` nodes rotated by `-90` degrees
+  around X so that they lie on the `X/Z` ground plane.
+
+Do not reintroduce the older `diag(-1, -1, 1)` camera-adapter basis without a
+renderer-backed regression test.
+
+## Box Match invariants
+
+Box Match means a general rectangular cuboid, not an ideal cube.
+
+- The three dimensions are independent.
+- The solver must never assume `width == height == depth`.
+- Each vanishing-point solve uses all four projected edges in its cuboid-axis
+  family.
+- For default ground axes `+X/+Z`, the derived height axis is `+Y`.
+- Corner semantics:
+  - `box_v000`: base anchor,
+  - `box_v100`: first-axis extent,
+  - `box_v010`: second-axis extent,
+  - `box_v001`: height extent,
+  - remaining corners combine those extents.
+- Export uses a Nuke `Cube` node with:
+  - `translate = reconstructed center`
+  - `scaling = reconstructed size`
+
+Nuke's default `Cube` bounds are `-0.5 .. 0.5`, so `scaling` receives the full
+cuboid size, not half-size.
+
+## Scene grid and origin
+
+Scene grid and origin card are independent scene helpers:
+
+- Scene grid is always centered at world origin.
+- Origin card is always centered at world origin.
+- Box fitting and match-box export must not move, resize or snap the grid.
+- A non-uniform cuboid does not distort grid aspect ratio.
+- Grid cells remain square in world space; perspective alone changes their
+  appearance in the image.
+
+Do not attach the scene grid to the match box.
+
+## Single-image ambiguities
+
+One image does not determine every absolute 3D property:
+
+1. Without a reference distance, camera translation and scene scale are
+   arbitrary.
+2. Even with camera scale, absolute match-box depth along its camera rays needs
+   an additional base-plane constraint.
+3. A projected cuboid can admit a floor-reflected camera solution.
+
+Current UI handling:
+
+- `Use reference distance` calibrates scene scale from a known segment on a
+  selected world axis through Scene Origin.
+- `Match box base offset` provides the independent base-plane constraint.
+- With default `+X/+Z` ground axes, `Match box base offset` is the box base Y
+  coordinate.
+- For the `X/Z` floor workflow, Box Match resolves the floor-reflection
+  ambiguity by preferring a camera in the `+Y` half-space.
+
+The floor-reflection rule was added after manual Nuke validation showed an
+otherwise correct export mirrored vertically through the floor.
+
+## Nuke ground truth
+
+The local `nuke_files/nuke_test_*.nk` scripts were inspected manually and their
+numeric values copied into `tests/test_box_match.py`. Tests do not parse or load
+the `.nk` files.
+
+Copied fixtures:
+
+```text
+nuke_test_01
+  camera translate:  3.140000105, 1.460000038, 4.684999943
+  camera rotate:    -15.22866726, 33.37726593, -9.817846298
+  focal:             64 mm
+  cuboid bounds:    -0.5,-0.5,-0.5 .. 0.5,0.5,0.5
+
+nuke_test_02
+  camera translate:  3.140000105, 1.460000038, 4.684999943
+  camera rotate:    -15.22866726, 33.37726593, -9.817846298
+  focal:             60 mm
+  cuboid bounds:    -0.5,-0.5,-1.210000038 .. 0.2849999964,0.5,0.5
+
+nuke_test_03
+  camera translate: -2.106587887, 0.828261137, 5.035273552
+  camera rotate:    -8.282423019,-22.48977661,-4.742154598
+  focal:             73 mm
+  cuboid bounds:    -0.5,-0.5,-1.210000038 .. 0.2849999964,0.5,0.5
+```
+
+Only `nuke_test_01` is an ideal cube. `nuke_test_02` and `nuke_test_03` are
+non-uniform cuboids and intentionally guard against cube-only math.
+
+The synthetic tests:
+
+1. Project copied Nuke cuboid corners into image space.
+2. Re-run Box Match from those image points.
+3. Recover focal length and camera transform.
+4. Reconstruct cuboid dimensions and reprojection.
+5. Apply base-plane offset and recover absolute cuboid bounds.
+6. Verify exported fake `Camera2` and `Cube` knob values.
+7. Verify the floor-reflection canonicalization regression.
 
 ## Verified behavior
 
-Regular test suite:
+Regular Python test suite:
 
 ```powershell
 python -m pytest -q
@@ -64,109 +194,42 @@ python -m pytest -q
 Last result:
 
 ```text
-56 passed
+60 passed
 ```
 
-Python 3.10 compatibility was checked with:
+Compile check:
 
 ```powershell
-& "C:\Program Files\Nuke15.1v4\python.exe" -m compileall -q lens_solver nuke_tests init.py menu.py
+python -m compileall -q lens_solver tests nuke_tests
 ```
 
-Nuke runtime checks passed:
+Manual Nuke validation completed by the user for `nuke_test_01`:
 
-```powershell
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_camera2_projection.py"
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_read_preview.py"
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe --tg -V 0 ".\nuke_tests\test_panel_smoke.py"
-```
+- expected focal: `64 mm`
+- observed solve: `64.079 mm`
+- camera export: visually correct after floor-reflection fix
+- scene grid export: correct and independent
+- match-box export: correct after floor-reflection fix
 
-Expected output:
+The small focal difference is expected from manual handle placement.
 
-```text
-camera2-projection-test passed
-read-preview-test passed
-panel-smoke-test passed
-```
+## Camera2 limitations
 
-## Important Camera2 findings
-
-Verified empirically in Nuke 15.1v4:
-
-- `Camera2` has knobs:
-  - `focal`
-  - `haperture`
-  - `vaperture`
-  - `win_translate`
-  - `useMatrix`
-  - `matrix`
-- `matrix` accepts 16 row-major values.
-- `world_matrix` reports the expected absolute matrix.
-- `useMatrix` must be enabled.
-- Nuke camera local image axes differ from core image axes. Adapter applies:
-
-```text
-diag(-1, -1, 1)
-```
-
-- Central principal point `(0.5, 0.5)` is verified by integration test.
-- Off-center principal point mapping through `win_translate` is intentionally
-  rejected by the adapter for now. The `nukescripts.snap3d` helper applies
-  `win_translate` in a way that did not match the required principal-point
-  interpretation. Do not silently re-enable this without a renderer-backed
-  regression test.
-- Updating parented `Camera2` nodes is intentionally rejected because the
-  adapter currently writes a local matrix derived from a world matrix.
-
-## Current blockers and limitations
-
-The tool is not end-to-end validated yet:
-
-1. Menu registration and dock opening were not verified manually in an
-   interactive GUI.
-   `--tg` instantiates `QApplication`, but Nuke still reports `not in GUI mode`
-   when `registerWidgetAsPanel()` accesses the `Pane` menu.
-2. VP lines and origin are still edited on a prototype `QGraphicsView` copy of
-   the plate inside the panel. Stage `6` now explicitly requires moving these
-   draggable handles onto the active Nuke Viewer image. The dockable panel
-   should retain only settings, solver messages and camera actions.
-3. There is no reference distance yet, so scene scale is arbitrary.
-4. No state persistence in `.nk` yet.
-
-## Next task
-
-Finish stage 6 by moving interaction to the Nuke Viewer:
-
-1. Implement a Python Viewer overlay for:
-   - two red VP segments,
-   - two blue VP segments,
-   - the yellow origin handle,
-   - draggable endpoints stored as relative plate coordinates.
-2. Keep axis mapping, sensor width, messages and camera buttons in the dockable
-   panel. Treat its current `QGraphicsView` plate copy as a prototype/fallback,
-   not the target UI.
-3. Manually launch interactive Nuke normally and verify:
-   - `Lens Solver` launcher appears in the left-side Nodes toolbar,
-   - dockable panel opens,
-   - selected `Read` is visible in the active Viewer,
-   - handles can be dragged directly over the Viewer plate,
-   - `Create Camera` creates a useful `Camera2`.
-4. Confirm that a generated camera is useful in a small `Project3D` or
-   `ScanlineRender` check over the real plate.
-
-After stage `6`, implement stage `7 - Box Match` before reference distance:
-
-- draw a constrained wireframe cuboid over the active Viewer,
-- use colored `X`, `Y`, `Z` edge groups,
-- expose only control corners that preserve a coherent cuboid perspective,
-- derive VP line groups from the cuboid edges,
-- allow a cuboid corner to become origin,
-- retain manual VP lines as the baseline and diagnostic mode.
-
-Do not move on to reference distance or persistence until the Viewer workflow
-and Box Match work end-to-end on a real plate.
+- Central principal point `(0.5, 0.5)` is supported.
+- Off-center principal point mapping through `win_translate` is deferred.
+- Updating parented `Camera2` nodes is rejected because the adapter currently
+  writes an unparented world transform.
+- Do not silently relax either limitation without targeted tests.
 
 ## Useful commands
+
+Run regular tests:
+
+```powershell
+python -m pytest -q
+python -m compileall -q lens_solver tests nuke_tests
+git diff --check
+```
 
 Install the development plugin once in `C:\Users\<user>\.nuke\init.py`:
 
@@ -175,23 +238,18 @@ import nuke
 nuke.pluginAddPath(r"D:/code/nuke_LensSolver")
 ```
 
-Nuke loads the repository's `menu.py` through normal plugin discovery. Do not
-add a second Lens Solver import to the user's `.nuke/menu.py`.
+Nuke loads this repository's `init.py` and `menu.py` through normal plugin
+discovery. Do not add a second Lens Solver import to the user's `.nuke/menu.py`.
 
-Run the terminal menu check:
+## Next work
 
-```powershell
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe --tg -V 0 ".\nuke_tests\test_menu_registration.py"
-```
+Continue manual validation with `nuke_test_02` and `nuke_test_03`, especially:
 
-Expected terminal-only result:
+- non-uniform cuboid export,
+- square world-grid cells under perspective,
+- independent Scene Origin,
+- `Match box base offset = -0.5`,
+- camera placement above the `X/Z` floor.
 
-```text
-menu-registration-test skipped: interactive GUI required
-```
-
-## Repository state
-
-At handoff, all files are untracked because the local repository has not been
-committed yet. Do not remove user files. Review `git status --short --branch`
-before making further edits.
+After stage 8 validation, continue with stage 9 principal-point and optics work
+from `PLAN.md`.
