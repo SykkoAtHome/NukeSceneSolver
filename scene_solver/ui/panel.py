@@ -1,4 +1,4 @@
-"""Dockable Lens Solver panel for Nuke 15.1."""
+"""Dockable Scene Solver panel for Nuke 15.1."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from math import degrees
 
 from PySide2 import QtCore, QtGui, QtWidgets
 
-from lens_solver.core import (
+from scene_solver.core import (
     BoxDimensionCalibration,
     BoxDimensionInput,
     GeometryError,
@@ -17,7 +17,7 @@ from lens_solver.core import (
     solve_box_match,
     solve_box_match_with_dimension,
 )
-from lens_solver.nuke_integration import (
+from scene_solver.nuke_integration import (
     CameraAdapterError,
     NodeSelectionError,
     PlateInfo,
@@ -32,7 +32,7 @@ from lens_solver.nuke_integration import (
     render_plate_preview,
     update_camera,
 )
-from lens_solver.ui.canvas import LensSolverCanvas
+from scene_solver.ui.canvas import SceneSolverCanvas
 
 
 AXES = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
@@ -40,7 +40,7 @@ ARBITRARY_SCALE_MODE = "Arbitrary camera distance"
 BOX_DIMENSION_SCALE_MODE = "Estimated match-box dimension"
 
 
-class LensSolverPanel(QtWidgets.QWidget):
+class SceneSolverPanel(QtWidgets.QWidget):
     """Interactive 2VP camera-matching panel."""
 
     def __init__(self, parent=None) -> None:
@@ -53,7 +53,7 @@ class LensSolverPanel(QtWidgets.QWidget):
         self._refresh_solution()
 
     def _build_ui(self) -> None:
-        self.setWindowTitle("Lens Solver")
+        self.setWindowTitle("Scene Solver")
         layout = QtWidgets.QVBoxLayout(self)
 
         plate_row = QtWidgets.QHBoxLayout()
@@ -63,7 +63,7 @@ class LensSolverPanel(QtWidgets.QWidget):
         plate_row.addWidget(self._use_read_button)
         layout.addLayout(plate_row)
 
-        self._canvas = LensSolverCanvas()
+        self._canvas = SceneSolverCanvas()
         layout.addWidget(self._canvas, 1)
 
         options = QtWidgets.QFormLayout()

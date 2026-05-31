@@ -1,4 +1,4 @@
-﻿# Nuke Lens Solver - PRD
+﻿# Nuke Scene Solver - PRD
 
 ## Status dokumentu
 
@@ -98,7 +98,7 @@ ustawiać w Viewerze, a nie na osobnej kopii plate'a w panelu.
 Docelowy przepływ:
 
 1. Zaznacz `Read`.
-2. Otwórz panel `Lens Solver`.
+2. Otwórz panel `Scene Solver`.
 3. Kliknij `Use Selected Read`.
 4. Ustaw odcinki VP oraz origin.
 5. Wybierz mapowanie osi świata.

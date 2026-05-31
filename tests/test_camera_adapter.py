@@ -1,8 +1,8 @@
 import pytest
 
-from lens_solver.core.models import Matrix4, Point2D, Segment2D, Vector3D
-from lens_solver.core.solver_2vp import SolveInput, solve_2vp
-from lens_solver.nuke_integration.camera_adapter import (
+from scene_solver.core.models import Matrix4, Point2D, Segment2D, Vector3D
+from scene_solver.core.solver_2vp import SolveInput, solve_2vp
+from scene_solver.nuke_integration.camera_adapter import (
     CameraAdapterError,
     core_camera_to_nuke_matrix,
     create_camera,

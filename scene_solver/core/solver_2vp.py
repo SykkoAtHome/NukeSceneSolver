@@ -11,14 +11,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import atan, isfinite, sqrt
 
-from lens_solver.core.coordinates import (
+from scene_solver.core.coordinates import (
     DEFAULT_PRINCIPAL_POINT,
     ImageDimensions,
     solver_to_ui,
     ui_to_solver,
 )
-from lens_solver.core.geometry import line_intersection_least_squares
-from lens_solver.core.models import (
+from scene_solver.core.geometry import line_intersection_least_squares
+from scene_solver.core.models import (
     DEFAULT_TOLERANCE,
     GeometryError,
     Matrix4,
@@ -26,11 +26,11 @@ from lens_solver.core.models import (
     Segment2D,
     Vector3D,
 )
-from lens_solver.core.projection import (
+from scene_solver.core.projection import (
     camera_direction_to_solver_point,
     solver_point_to_camera_ray,
 )
-from lens_solver.core.reference_distance import (
+from scene_solver.core.reference_distance import (
     ReferenceDistanceCalibration,
     ReferenceDistanceInput,
     calibrate_reference_distance,

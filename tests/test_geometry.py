@@ -2,12 +2,12 @@ from math import isclose
 
 import pytest
 
-from lens_solver.core.geometry import (
+from scene_solver.core.geometry import (
     GeometryError,
     line_intersection,
     line_intersection_least_squares,
 )
-from lens_solver.core.models import Matrix4, Point2D, Segment2D, Vector2D, Vector3D
+from scene_solver.core.models import Matrix4, Point2D, Segment2D, Vector2D, Vector3D
 
 
 def assert_vector3_close(actual: Vector3D, expected: Vector3D) -> None:

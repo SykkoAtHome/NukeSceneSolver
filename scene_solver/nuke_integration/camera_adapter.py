@@ -9,8 +9,8 @@ from __future__ import annotations
 from math import isclose
 from typing import Any
 
-from lens_solver.core.models import Matrix4, Vector3D
-from lens_solver.core.solver_2vp import SolveResult
+from scene_solver.core.models import Matrix4, Vector3D
+from scene_solver.core.solver_2vp import SolveResult
 
 
 class CameraAdapterError(ValueError):
@@ -29,7 +29,7 @@ def core_camera_to_nuke_matrix(camera_to_world_matrix: Matrix4) -> Matrix4:
 def create_camera(
     result: SolveResult,
     *,
-    name: str = "LensSolverCamera",
+    name: str = "SceneSolverCamera",
     nuke_module: Any | None = None,
 ) -> Any:
     """Create an unparented Camera2 node and apply a successful solve result."""

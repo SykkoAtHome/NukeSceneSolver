@@ -1,8 +1,8 @@
 import pytest
 
-from lens_solver.core.models import Vector3D
-from lens_solver.core.scene_reconstruction import MatchBox
-from lens_solver.nuke_integration.scene_helpers import (
+from scene_solver.core.models import Vector3D
+from scene_solver.core.scene_reconstruction import MatchBox
+from scene_solver.nuke_integration.scene_helpers import (
     SceneHelperError,
     create_match_box,
     create_origin_card,

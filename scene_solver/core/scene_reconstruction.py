@@ -5,14 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from lens_solver.core.box_match import BOX_CORNER_NAMES
-from lens_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Vector3D
-from lens_solver.core.reference_distance import (
+from scene_solver.core.box_match import BOX_CORNER_NAMES
+from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Vector3D
+from scene_solver.core.reference_distance import (
     axis_coordinate_from_ui,
     world_ray_from_ui,
     world_axis_vector,
 )
-from lens_solver.core.solver_2vp import SolveResult
+from scene_solver.core.solver_2vp import SolveResult
 
 
 @dataclass(frozen=True, slots=True)

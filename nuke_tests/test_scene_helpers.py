@@ -1,4 +1,4 @@
-"""Integration test for Lens Solver scene helpers.
+"""Integration test for Scene Solver scene helpers.
 
 Run with:
 
@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import nuke
 
-from lens_solver.core import MatchBox, Vector3D
-from lens_solver.nuke_integration import (
+from scene_solver.core import MatchBox, Vector3D
+from scene_solver.nuke_integration import (
     create_match_box,
     create_origin_card,
     create_scene_grid,

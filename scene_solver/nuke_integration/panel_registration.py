@@ -1,18 +1,18 @@
-"""Register and open the dockable Lens Solver panel in Nuke."""
+"""Register and open the dockable Scene Solver panel in Nuke."""
 
 from __future__ import annotations
 
 from typing import Any
 
 
-PANEL_CLASS = "lens_solver.ui.panel.LensSolverPanel"
-PANEL_TITLE = "Lens Solver"
-PANEL_ID = "com.rafal.nukeLensSolver"
-TOOLBAR_COMMAND = "Lens Solver/Open Lens Solver"
+PANEL_CLASS = "scene_solver.ui.panel.SceneSolverPanel"
+PANEL_TITLE = "Scene Solver"
+PANEL_ID = "com.rafal.nukeSceneSolver"
+TOOLBAR_COMMAND = "Scene Solver/Open Scene Solver"
 
 
 def show_panel() -> Any:
-    """Create and dock a Lens Solver panel in the Properties pane."""
+    """Create and dock a Scene Solver panel in the Properties pane."""
 
     import nuke
     from nukescripts import panels

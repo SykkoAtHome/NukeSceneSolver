@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from lens_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Vector3D
+from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Vector3D
 
 
 def solver_point_to_camera_ray(point: Point2D, focal_plane_distance: float) -> Vector3D:

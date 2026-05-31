@@ -1,4 +1,4 @@
-"""Integration test for the Lens Solver Camera2 adapter.
+"""Integration test for the Scene Solver Camera2 adapter.
 
 Run with:
 
@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import nuke
 from nukescripts import snap3d
 
-from lens_solver.core import (
+from scene_solver.core import (
     ImageDimensions,
     Point2D,
     Segment2D,
@@ -25,7 +25,7 @@ from lens_solver.core import (
     solve_2vp,
     solver_to_ui,
 )
-from lens_solver.nuke_integration import core_camera_to_nuke_matrix, create_camera
+from scene_solver.nuke_integration import core_camera_to_nuke_matrix, create_camera
 
 
 DIMENSIONS = ImageDimensions(1920, 1080)
@@ -105,7 +105,7 @@ def main() -> None:
     if not result.ok:
         raise AssertionError(result.errors)
 
-    camera = create_camera(result, name="LensSolverProjectionTest")
+    camera = create_camera(result, name="SceneSolverProjectionTest")
     assert camera["useMatrix"].value() is True
     assert_close(camera["focal"].value(), 32.4)
     assert_close(camera["haperture"].value(), 36.0)

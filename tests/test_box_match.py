@@ -3,7 +3,8 @@ from math import cos, isclose, radians, sin
 
 import pytest
 
-from lens_solver.core import (
+from scene_solver.core import (
+    BoxDimensionInput,
     ImageDimensions,
     Matrix4,
     Point2D,
@@ -14,11 +15,12 @@ from lens_solver.core import (
     box_axis_segments,
     reconstruct_match_box,
     solve_box_match,
+    solve_box_match_with_dimension,
     solver_to_ui,
 )
-from lens_solver.nuke_integration.camera_adapter import CORE_TO_NUKE_CAMERA_BASIS
-from lens_solver.nuke_integration.camera_adapter import create_camera
-from lens_solver.nuke_integration.scene_helpers import create_match_box
+from scene_solver.nuke_integration.camera_adapter import CORE_TO_NUKE_CAMERA_BASIS
+from scene_solver.nuke_integration.camera_adapter import create_camera
+from scene_solver.nuke_integration.scene_helpers import create_match_box
 
 
 DIMENSIONS = ImageDimensions(1920, 1080)
@@ -302,6 +304,43 @@ def test_box_match_preserves_selected_axis_signs_when_edge_order_is_reversed() -
     assert result.ok
     assert result.camera_position is not None
     assert result.camera_position.y > 0.0
+
+
+def test_box_dimension_calibration_recovers_camera_and_cuboid_without_reference_line() -> None:
+    ground_truth = NUKE_GROUND_TRUTH[2]
+    projected_corners = {
+        name: project_nuke_world_point(ground_truth, point)
+        for name, point in ground_truth.cuboid.corners().items()
+    }
+    result, calibration = solve_box_match_with_dimension(
+        SolveInput(
+            image_width=DIMENSIONS.width,
+            image_height=DIMENSIONS.height,
+            vp1_segments=(),
+            vp2_segments=(),
+            origin=project_nuke_world_point(ground_truth, Vector3D(0.0, 0.0, 0.0)),
+            first_axis="+X",
+            second_axis="+Z",
+            sensor_width_mm=SENSOR_WIDTH_MM,
+        ),
+        projected_corners,
+        BoxDimensionInput(axis="Z", length=ground_truth.cuboid.size.z),
+        base_plane_offset=ground_truth.cuboid_base_y,
+    )
+
+    assert result.ok
+    assert result.camera_position is not None
+    assert calibration is not None
+    assert_vector_close(result.camera_position, ground_truth.camera_translate)
+    assert_close(calibration.measured_length, ground_truth.cuboid.size.z)
+    match_box = reconstruct_match_box(
+        result,
+        projected_corners,
+        "+X",
+        "+Z",
+        base_plane_offset=ground_truth.cuboid_base_y,
+    )
+    assert_cuboid_bounds(match_box.center, match_box.size, ground_truth.cuboid)
 
 
 @pytest.mark.parametrize("ground_truth", NUKE_GROUND_TRUTH, ids=lambda value: value.name)

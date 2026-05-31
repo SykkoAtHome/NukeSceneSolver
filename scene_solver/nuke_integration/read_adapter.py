@@ -75,7 +75,7 @@ def render_plate_preview(
     previous_modified = _script_modified(nuke)
     temporary_nodes: list[Any] = []
     file_descriptor, file_path = tempfile.mkstemp(
-        prefix="nuke_lens_solver_preview_",
+        prefix="nuke_scene_solver_preview_",
         suffix=".png",
         dir=temporary_directory,
     )
@@ -83,7 +83,7 @@ def render_plate_preview(
     preview_path = Path(file_path)
 
     try:
-        reformat = nuke.nodes.Reformat(name="LensSolverPreviewReformat")
+        reformat = nuke.nodes.Reformat(name="SceneSolverPreviewReformat")
         temporary_nodes.append(reformat)
         reformat.setInput(0, plate.node)
         _set_knob(reformat, "type", "to box")
@@ -92,7 +92,7 @@ def render_plate_preview(
         _set_knob(reformat, "box_fixed", True)
         _set_knob(reformat, "resize", "fit")
 
-        write = nuke.nodes.Write(name="LensSolverPreviewWrite")
+        write = nuke.nodes.Write(name="SceneSolverPreviewWrite")
         temporary_nodes.append(write)
         write.setInput(0, reformat)
         _set_knob(write, "file", preview_path.as_posix())

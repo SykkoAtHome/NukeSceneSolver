@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nuke-lens-solver"
+name = "nuke-scene-solver"
 version = "0.1.0"
 description = "Single-image perspective camera solver for Foundry Nuke"
 readme = "README.md"

@@ -1,4 +1,4 @@
-# Nuke Lens Solver
+# Nuke Scene Solver
 
 Native Python tool for Foundry Nuke 15.1 that matches a `Camera2` node to
 perspective lines marked on a single image.
@@ -31,12 +31,12 @@ For development inside Nuke, add the repository plugin path once in
 
 ```python
 import nuke
-nuke.pluginAddPath(r"D:/code/nuke_LensSolver")
+nuke.pluginAddPath(r"D:/code/nuke_SceneSolver")
 ```
 
 Nuke then loads this repository's `init.py` and `menu.py` through its normal
-plugin discovery. No Lens Solver import is required in the user's `.nuke/menu.py`.
-After restarting Nuke normally, open `Lens Solver > Open Lens Solver` from the
+plugin discovery. No Scene Solver import is required in the user's `.nuke/menu.py`.
+After restarting Nuke normally, open `Scene Solver > Open Scene Solver` from the
 Nodes toolbar on the left side.
 Select one `Read` node and click `Use Selected Read`. Common Qt-supported image
 formats display directly in the panel. For formats such as EXR, the panel asks
@@ -53,13 +53,16 @@ The panel prototype also contains `Box Match`: a wireframe cuboid for fitting
 buildings and interiors by dragging control corners over the plate. Manual VP
 lines remain available as the baseline and diagnostic mode.
 
-Stage 8 reference-distance work is complete. Enable `Use reference distance`,
-choose the world axis, enter the known length, and place the orange reference
-line on the corresponding scene edge through `Scene Origin`. The solver
-rescales camera translation without changing perspective. The canvas also
-exposes a `Horizon` HUD toggle and the panel can create a scene grid, origin
-card, or coarse match-box cuboid as a scaled Nuke `Cube` node. Box Match does
-not assume equal side lengths.
+Stage 8 scale and export work is complete. `Scene scale mode` exposes two
+alternatives. `Arbitrary camera distance` uses an editable camera distance in
+Nuke world units. `Estimated match-box dimension` disables that arbitrary
+control: choose the `X`, `Y`, or `Z` box dimension and enter its estimated
+world-space length. The solver calibrates camera translation without changing
+perspective. This mode uses `Match box base offset` as its independent base
+plane constraint; the default `0` places the box on the `X/Z` scene grid. The
+canvas also exposes a `Horizon` HUD toggle and the panel can create a scene
+grid, origin card, or coarse match-box cuboid as a scaled Nuke `Cube` node. Box
+Match does not assume equal side lengths.
 
 Nuke uses `+Y` as world up. The panel therefore defaults to `+X` and `+Z` for
 the two ground-plane vanishing points. Scene-grid and origin-marker cards are
@@ -95,7 +98,8 @@ logic is covered by the regular unit tests.
 - `camera_to_world_matrix` maps Nuke-compatible camera-space points into world
   space. Local `-Z` points forward, while local `+X` and `+Y` point right and
   up.
-- Without a reference distance, camera position and scene scale are arbitrary.
+- Without a scene-scale calibration, camera position and scene scale are
+  arbitrary.
 
 ## Current limitations
 

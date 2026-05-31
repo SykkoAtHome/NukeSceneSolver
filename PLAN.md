@@ -1,4 +1,4 @@
-# Nuke Lens Solver - Plan działania
+# Nuke Scene Solver - Plan działania
 
 ## Zasady realizacji
 
@@ -11,13 +11,13 @@
 ## Docelowa struktura repo
 
 ```text
-nuke_LensSolver/
+nuke_SceneSolver/
   README.md
   PRD.md
   PLAN.md
   init.py
   menu.py
-  lens_solver/
+  scene_solver/
     __init__.py
     core/
       __init__.py
@@ -69,6 +69,8 @@ Zadania:
 - **Solver Core:**
   - wyznaczyć punkty 3D odcinka przez przecięcie promieni z odpowiednią płaszczyzną,
   - przeskalować translację kamery na podstawie tego odcinka.
+  - finalny workflow UI: skalować scenę na podstawie szacowanego wymiaru
+    dopasowanego Box Match i niezależnego offsetu jego płaszczyzny podstawy.
 - **Nuke Integration (Eksport Helperów):**
   - dodać przycisk `Create Scene Grid` (wygenerowanie node'a Grid podpiętego pod środek świata),
   - dodać przycisk `Create Origin Card` (wygenerowanie node'a Card w punkcie 0,0,0),

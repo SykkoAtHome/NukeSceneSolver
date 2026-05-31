@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 
-from lens_solver.core.coordinates import ImageDimensions, ui_to_solver
-from lens_solver.core.models import (
+from scene_solver.core.coordinates import ImageDimensions, ui_to_solver
+from scene_solver.core.models import (
     DEFAULT_TOLERANCE,
     GeometryError,
     Matrix4,
@@ -14,7 +14,7 @@ from lens_solver.core.models import (
     Segment2D,
     Vector3D,
 )
-from lens_solver.core.projection import solver_point_to_camera_ray
+from scene_solver.core.projection import solver_point_to_camera_ray
 
 
 AXIS_VECTORS = {

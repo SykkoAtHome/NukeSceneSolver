@@ -3,10 +3,10 @@ from math import atan, isclose, sqrt
 
 import pytest
 
-from lens_solver.core.coordinates import ImageDimensions, solver_to_ui
-from lens_solver.core.models import Point2D, Segment2D, Vector3D
-from lens_solver.core.reference_distance import ReferenceDistanceInput
-from lens_solver.core.solver_2vp import SolveInput, solve_2vp
+from scene_solver.core.coordinates import ImageDimensions, solver_to_ui
+from scene_solver.core.models import Point2D, Segment2D, Vector3D
+from scene_solver.core.reference_distance import ReferenceDistanceInput
+from scene_solver.core.solver_2vp import SolveInput, solve_2vp
 
 
 def assert_close(actual: float | None, expected: float, tolerance: float = 1e-9) -> None:
@@ -223,6 +223,49 @@ def test_solver_scales_camera_translation_from_reference_distance() -> None:
         Vector3D(9.0, 0.0, 0.0),
     )
     assert not any("scale are arbitrary" in warning for warning in scaled_result.warnings)
+
+
+def test_reference_distance_result_is_independent_of_arbitrary_camera_distance() -> None:
+    dimensions = ImageDimensions(1920, 1080)
+    solve_input = make_input(dimensions, CAMERA_X, CAMERA_Y)
+    arbitrary_result = solve_2vp(solve_input)
+    assert arbitrary_result.ok
+    assert arbitrary_result.world_to_camera_matrix is not None
+    assert arbitrary_result.relative_focal_length is not None
+
+    def project_world_point(point: Vector3D) -> Point2D:
+        camera_point = arbitrary_result.world_to_camera_matrix.transform_point(point)
+        return solver_to_ui(
+            project_direction(camera_point, arbitrary_result.relative_focal_length / 2.0),
+            dimensions,
+        )
+
+    reference = ReferenceDistanceInput(
+        segment_ui=Segment2D(
+            project_world_point(Vector3D(-1.0, 0.0, 0.0)),
+            project_world_point(Vector3D(3.0, 0.0, 0.0)),
+        ),
+        axis="+X",
+        distance=12.0,
+    )
+    results = tuple(
+        solve_2vp(
+            replace(
+                solve_input,
+                camera_distance=camera_distance,
+                reference_distance=reference,
+            )
+        )
+        for camera_distance in (2.0, 10.0, 250.0)
+    )
+
+    expected = results[0]
+    assert expected.ok
+    assert expected.camera_position is not None
+    for result in results[1:]:
+        assert result.ok
+        assert result.camera_position is not None
+        assert_vector_close(result.camera_position, expected.camera_position)
 
 
 def test_solver_warns_when_third_vanishing_point_is_at_infinity() -> None:

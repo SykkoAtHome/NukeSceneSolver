@@ -7,7 +7,7 @@ import nuke
 
 def main() -> None:
     print("nuke-version", nuke.NUKE_VERSION_STRING, flush=True)
-    camera = nuke.nodes.Camera2(name="LensSolverRuntimeProbe")
+    camera = nuke.nodes.Camera2(name="SceneSolverRuntimeProbe")
     print("camera-class", camera.Class(), flush=True)
     for name in ("focal", "haperture", "vaperture", "win_translate", "useMatrix", "matrix"):
         knob = camera.knob(name)

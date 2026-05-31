@@ -1,6 +1,6 @@
 from math import isclose
 
-from lens_solver.core import (
+from scene_solver.core import (
     ImageDimensions,
     Point2D,
     Segment2D,

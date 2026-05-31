@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from lens_solver.core.models import Point2D
+from scene_solver.core.models import Point2D
 
 
 @dataclass(frozen=True, slots=True)

@@ -43,7 +43,7 @@ def project(camera, point) -> tuple[float, float]:
 
 def main() -> None:
     nuke.root()["format"].setValue("HD_1080")
-    camera = nuke.nodes.Camera2(name="LensSolverConventionsProbe")
+    camera = nuke.nodes.Camera2(name="SceneSolverConventionsProbe")
     camera["focal"].setValue(18.0)
     camera["haperture"].setValue(36.0)
     camera["vaperture"].setValue(20.25)

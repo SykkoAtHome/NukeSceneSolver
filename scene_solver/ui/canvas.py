@@ -1,4 +1,4 @@
-"""Editable perspective-line canvas for the Lens Solver panel."""
+"""Editable perspective-line canvas for the Scene Solver panel."""
 
 from __future__ import annotations
 
@@ -6,10 +6,10 @@ from collections.abc import Iterable
 
 from PySide2 import QtCore, QtGui, QtWidgets
 
-from lens_solver.core import BOX_EDGES, SolveResult, box_axis_segments
-from lens_solver.core.models import Point2D, Segment2D, Vector3D
-from lens_solver.core.coordinates import ui_to_solver
-from lens_solver.core.projection import solver_point_to_camera_ray
+from scene_solver.core import BOX_EDGES, SolveResult, box_axis_segments
+from scene_solver.core.models import Point2D, Segment2D, Vector3D
+from scene_solver.core.coordinates import ui_to_solver
+from scene_solver.core.projection import solver_point_to_camera_ray
 
 
 HANDLE_RADIUS = 8.0
@@ -117,7 +117,7 @@ class _HandleItem(QtWidgets.QGraphicsEllipseItem):
         return super().itemChange(change, value)
 
 
-class LensSolverCanvas(QtWidgets.QGraphicsView):
+class SceneSolverCanvas(QtWidgets.QGraphicsView):
     """QGraphicsView canvas that exposes four VP segments and one origin."""
 
     changed = QtCore.Signal()

@@ -2,14 +2,14 @@ from math import isclose
 
 import pytest
 
-from lens_solver.core.coordinates import (
+from scene_solver.core.coordinates import (
     ImageDimensions,
     pixel_to_ui,
     solver_to_ui,
     ui_to_pixel,
     ui_to_solver,
 )
-from lens_solver.core.models import Point2D
+from scene_solver.core.models import Point2D
 
 
 @pytest.mark.parametrize(

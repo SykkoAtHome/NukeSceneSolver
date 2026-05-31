@@ -1,4 +1,4 @@
-"""Create lightweight Nuke 3D helper nodes for a Lens Solver scene."""
+"""Create lightweight Nuke 3D helper nodes for a Scene Solver scene."""
 
 from __future__ import annotations
 
@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 
-from lens_solver.core.models import Vector3D
-from lens_solver.core.scene_reconstruction import MatchBox
+from scene_solver.core.models import Vector3D
+from scene_solver.core.scene_reconstruction import MatchBox
 
 
 GROUND_PLANE_ROTATION = Vector3D(-90.0, 0.0, 0.0)
@@ -25,7 +25,7 @@ class SceneGridNodes:
 
 def create_scene_grid(
     *,
-    name: str = "LensSolverSceneGrid",
+    name: str = "SceneSolverSceneGrid",
     size: float = 10.0,
     nuke_module: Any | None = None,
 ) -> SceneGridNodes:
@@ -44,7 +44,7 @@ def create_scene_grid(
 
 def create_origin_card(
     *,
-    name: str = "LensSolverOriginCard",
+    name: str = "SceneSolverOriginCard",
     size: float = 0.25,
     nuke_module: Any | None = None,
 ) -> Any:
@@ -62,7 +62,7 @@ def create_origin_card(
 def create_match_box(
     match_box: MatchBox,
     *,
-    name: str = "LensSolverMatchBox",
+    name: str = "SceneSolverMatchBox",
     nuke_module: Any | None = None,
 ) -> Any:
     """Create a Cube matching the coarse box reconstruction."""

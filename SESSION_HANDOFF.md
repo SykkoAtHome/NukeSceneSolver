@@ -1,7 +1,7 @@
-# Nuke Lens Solver - project memory
+# Nuke Scene Solver - project memory
 
 Updated: 2026-05-31
-Workspace: `D:\code\nuke_LensSolver`
+Workspace: `D:\code\nuke_SceneSolver`
 Target: Foundry Nuke `15.1v4`
 
 ## Read first
@@ -35,28 +35,29 @@ them untracked unless the user explicitly asks to add them.
 
 Implemented:
 
-- `lens_solver.core`:
+- `scene_solver.core`:
   - guarded geometry, vector and matrix operations,
   - explicit UI, pixel, solver-plane and camera-space conversions,
   - tested `2VP` pinhole solver,
   - least-squares vanishing points from multiple segments,
-  - optional reference-distance calibration,
+  - optional low-level reference-distance calibration,
   - projected cuboid edge extraction and Box Match solve,
   - coarse axis-aligned match-box reconstruction,
+  - match-box dimension scene-scale calibration,
   - optional base-plane constraint for absolute box placement.
-- `lens_solver.nuke_integration`:
+- `scene_solver.nuke_integration`:
   - `Camera2` create/update adapter,
   - selected `Read` and `Camera2` helpers,
   - EXR preview fallback through temporary Nuke nodes,
   - independent scene-grid card, origin card and match-box `Cube` helpers.
-- `lens_solver.ui`:
+- `scene_solver.ui`:
   - dockable PySide2 panel,
   - editable VP lines and independent Scene Origin,
   - Box Match wireframe with eight image-space corners,
-  - reference-distance line,
   - horizon HUD,
-  - helper-node export buttons,
-  - explicit `Match box base offset`.
+- helper-node export buttons,
+- explicit scene-scale mode selection,
+- explicit `Match box base offset`.
 
 Stage 8 is complete. Core behavior, helper export and representative manual
 validation in Nuke are complete.
@@ -123,7 +124,7 @@ Do not attach the scene grid to the match box.
 
 One image does not determine every absolute 3D property:
 
-1. Without a reference distance, camera translation and scene scale are
+1. Without scene-scale calibration, camera translation and scene scale are
    arbitrary.
 2. Even with camera scale, absolute match-box depth along its camera rays needs
    an additional base-plane constraint.
@@ -131,8 +132,19 @@ One image does not determine every absolute 3D property:
 
 Current UI handling:
 
-- `Use reference distance` calibrates scene scale from a known segment on a
-  selected world axis through Scene Origin.
+- `Scene scale mode` presents two alternatives:
+  - `Arbitrary camera distance` enables `Camera distance` in Nuke world units.
+  - `Estimated match-box dimension` disables the arbitrary camera-distance
+    control and enables a world-axis dimension selector plus an estimated
+    length in Nuke world units.
+- Match-box dimension calibration uses the selected cuboid dimension and
+  `Match box base offset` to resolve scene scale without changing perspective.
+- The default base offset `0` means that the box stands on the `X/Z` grid.
+- The older origin-bound orange reference segment was removed from the panel
+  because it was too restrictive for practical use. Its low-level core helper
+  remains isolated and covered by tests.
+- The calibrated result is independent of the internal arbitrary
+  camera-distance seed. Regression tests protect this invariant.
 - `Match box base offset` provides the independent base-plane constraint.
 - With default `+X/+Z` ground axes, `Match box base offset` is the box base Y
   coordinate.
@@ -200,7 +212,7 @@ Last result:
 Compile check:
 
 ```powershell
-python -m compileall -q lens_solver tests nuke_tests
+python -m compileall -q scene_solver tests nuke_tests
 ```
 
 Manual Nuke validation completed by the user for `nuke_test_01`:
@@ -234,7 +246,7 @@ Run regular tests:
 
 ```powershell
 python -m pytest -q
-python -m compileall -q lens_solver tests nuke_tests
+python -m compileall -q scene_solver tests nuke_tests
 git diff --check
 ```
 
@@ -242,11 +254,11 @@ Install the development plugin once in `C:\Users\<user>\.nuke\init.py`:
 
 ```python
 import nuke
-nuke.pluginAddPath(r"D:/code/nuke_LensSolver")
+nuke.pluginAddPath(r"D:/code/nuke_SceneSolver")
 ```
 
 Nuke loads this repository's `init.py` and `menu.py` through normal plugin
-discovery. Do not add a second Lens Solver import to the user's `.nuke/menu.py`.
+discovery. Do not add a second Scene Solver import to the user's `.nuke/menu.py`.
 
 ## Next work
 

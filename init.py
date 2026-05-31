@@ -1,2 +1,2 @@
-"""Nuke plugin-path entrypoint for Lens Solver."""
+"""Nuke plugin-path entrypoint for Scene Solver."""
 

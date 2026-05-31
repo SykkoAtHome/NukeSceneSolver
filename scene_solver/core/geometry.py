@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from lens_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Segment2D
+from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Segment2D
 
 
 def line_intersection(
