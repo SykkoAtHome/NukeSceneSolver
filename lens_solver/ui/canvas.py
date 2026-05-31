@@ -26,12 +26,28 @@ class _HandleItem(QtWidgets.QGraphicsEllipseItem):
         super().__init__(-HANDLE_RADIUS, -HANDLE_RADIUS, HANDLE_RADIUS * 2.0, HANDLE_RADIUS * 2.0)
         self.signals = _HandleSignals()
         self._plate_rect = plate_rect
-        self.setBrush(QtGui.QBrush(color))
-        self.setPen(QtGui.QPen(QtGui.QColor("#111111"), 1.5))
+        self._color = color
+        
+        # Style: Transparent body, thin cosmetic outline
+        self.setBrush(QtGui.QBrush(QtGui.QColor(0, 0, 0, 0)))
+        pen = QtGui.QPen(color, 1.5)
+        pen.setCosmetic(True)
+        self.setPen(pen)
+        
         self.setFlag(QtWidgets.QGraphicsItem.ItemIsMovable)
         self.setFlag(QtWidgets.QGraphicsItem.ItemSendsGeometryChanges)
         self.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
         self.setZValue(3.0)
+        
+        # Add a small dot in the middle (also ignores transformations)
+        dot_radius = 1.5
+        self._dot = QtWidgets.QGraphicsEllipseItem(
+            -dot_radius, -dot_radius, dot_radius * 2.0, dot_radius * 2.0, self
+        )
+        self._dot.setBrush(QtGui.QBrush(color))
+        self._dot.setPen(QtCore.Qt.NoPen)
+        self._dot.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+        
         self.set_relative_position(relative_position)
 
     def set_plate_rect(self, plate_rect: QtCore.QRectF) -> None:
@@ -77,6 +93,13 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self.setRenderHints(QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform)
         self.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#202225")))
         self.setMinimumHeight(320)
+        
+        # Interactive behavior
+        self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self.setDragMode(QtWidgets.QGraphicsView.NoDrag)
 
         self._plate_rect = QtCore.QRectF(0.0, 0.0, 1920.0, 1080.0)
         self._plate_item = QtWidgets.QGraphicsPixmapItem()
@@ -94,6 +117,41 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._create_segment("vp2_b", Point2D(0.80, 0.80), Point2D(0.61, 0.21), "#5ca8ff")
         self._handles["origin"] = self._create_handle(Point2D(0.5, 0.5), "#ffd45c")
         self.set_plate(1920, 1080)
+
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802 - Qt API name
+        zoom_in_factor = 1.25
+        zoom_out_factor = 1.0 / zoom_in_factor
+        if event.angleDelta().y() > 0:
+            self.scale(zoom_in_factor, zoom_in_factor)
+        else:
+            self.scale(zoom_out_factor, zoom_out_factor)
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802 - Qt API name
+        if event.button() == QtCore.Qt.MiddleButton:
+            self.setDragMode(QtWidgets.QGraphicsView.ScrollHandDrag)
+            fake_event = QtGui.QMouseEvent(
+                event.type(), event.pos(), QtCore.Qt.LeftButton,
+                QtCore.Qt.LeftButton, event.modifiers()
+            )
+            super().mousePressEvent(fake_event)
+        else:
+            super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802 - Qt API name
+        if event.button() == QtCore.Qt.MiddleButton:
+            self.setDragMode(QtWidgets.QGraphicsView.NoDrag)
+            fake_event = QtGui.QMouseEvent(
+                event.type(), event.pos(), QtCore.Qt.LeftButton,
+                QtCore.Qt.LeftButton, event.modifiers()
+            )
+            super().mouseReleaseEvent(fake_event)
+        else:
+            super().mouseReleaseEvent(event)
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:  # noqa: N802 - Qt API name
+        """Trigger line update on zoom/pan to keep handle-clipping accurate."""
+        super().scrollContentsBy(dx, dy)
+        self._update_lines()
 
     def set_plate(self, width: int, height: int, pixmap: QtGui.QPixmap | None = None) -> None:
         relative_positions = {
@@ -141,7 +199,9 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         end: Point2D,
         color: str,
     ) -> None:
-        line = self._scene.addLine(QtCore.QLineF(), QtGui.QPen(QtGui.QColor(color), 3.0))
+        pen = QtGui.QPen(QtGui.QColor(color), 1.5)
+        pen.setCosmetic(True)
+        line = self._scene.addLine(QtCore.QLineF(), pen)
         line.setZValue(2.0)
         self._lines[name] = line
         self._handles[f"{name}_start"] = self._create_handle(start, color)
@@ -159,9 +219,36 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
 
     def _update_lines(self) -> None:
         for name, line in self._lines.items():
-            start = self._handles[f"{name}_start"].pos()
-            end = self._handles[f"{name}_end"].pos()
-            line.setLine(QtCore.QLineF(start, end))
+            start_handle = self._handles[f"{name}_start"]
+            end_handle = self._handles[f"{name}_end"]
+            
+            p1 = start_handle.pos()
+            p2 = end_handle.pos()
+            
+            # Vector from start to end
+            dx = p2.x() - p1.x()
+            dy = p2.y() - p1.y()
+            length = (dx*dx + dy*dy)**0.5
+            
+            if length > HANDLE_RADIUS * 2.0:
+                # Offset points by handle radius along the segment direction
+                # Note: We need to account for current view scale if we want
+                # the gap to perfectly match the non-scaling handle circle.
+                # Since handles ignore transformations, HANDLE_RADIUS is in screen pixels.
+                # We need to map screen distance back to scene distance.
+                inv_scale = 1.0 / self.transform().m11()
+                scene_offset = HANDLE_RADIUS * inv_scale
+                
+                if length > scene_offset * 2.0:
+                    ratio = scene_offset / length
+                    p1_offset = QtCore.QPointF(p1.x() + dx * ratio, p1.y() + dy * ratio)
+                    p2_offset = QtCore.QPointF(p2.x() - dx * ratio, p2.y() - dy * ratio)
+                    line.setLine(QtCore.QLineF(p1_offset, p2_offset))
+                    line.setVisible(True)
+                else:
+                    line.setVisible(False)
+            else:
+                line.setVisible(False)
 
     def _segments(self, *names: str) -> tuple[Segment2D, Segment2D]:
         return tuple(self._segment(name) for name in names)  # type: ignore[return-value]
