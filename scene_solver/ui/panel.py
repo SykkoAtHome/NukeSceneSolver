@@ -319,9 +319,9 @@ class SceneSolverPanel(QtWidgets.QWidget):
     def _on_pp_offset_toggled(self) -> None:
         mode = self._get_current_mode()
         show_pp = self._use_pp_offset.isChecked()
-        # 3VP with Auto PP always enables visibility of the PP crosshair
+        # Hide PP crosshair if it's being auto-calculated so the user isn't confused
         if mode == "3vp" and self._auto_pp.isChecked():
-            show_pp = True
+            show_pp = False
         self._canvas.set_principal_point_visible(show_pp)
         self._refresh_solution()
 
