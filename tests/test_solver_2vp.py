@@ -1,9 +1,11 @@
+from dataclasses import replace
 from math import atan, isclose, sqrt
 
 import pytest
 
 from lens_solver.core.coordinates import ImageDimensions, solver_to_ui
 from lens_solver.core.models import Point2D, Segment2D, Vector3D
+from lens_solver.core.reference_distance import ReferenceDistanceInput
 from lens_solver.core.solver_2vp import SolveInput, solve_2vp
 
 
@@ -26,8 +28,8 @@ def assert_vector_close(actual: Vector3D, expected: Vector3D, tolerance: float =
 
 def project_direction(direction: Vector3D, focal_plane_distance: float) -> Point2D:
     return Point2D(
-        focal_plane_distance * direction.x / direction.z,
-        focal_plane_distance * direction.y / direction.z,
+        -focal_plane_distance * direction.x / direction.z,
+        -focal_plane_distance * direction.y / direction.z,
     )
 
 
@@ -84,8 +86,8 @@ def make_input(
     )
 
 
-CAMERA_X = Vector3D(0.8, 0.0, 0.6)
-CAMERA_Y = Vector3D(-0.36, 0.8, 0.48)
+CAMERA_X = Vector3D(-0.8, 0.0, -0.6)
+CAMERA_Y = Vector3D(0.36, -0.8, -0.48)
 CAMERA_Z = Vector3D(-0.48, -0.6, 0.64)
 
 
@@ -177,6 +179,52 @@ def test_solver_supports_negative_axis_mapping() -> None:
     )
 
 
+def test_solver_scales_camera_translation_from_reference_distance() -> None:
+    dimensions = ImageDimensions(1920, 1080)
+    solve_input = make_input(dimensions, CAMERA_X, CAMERA_Y)
+    arbitrary_result = solve_2vp(solve_input)
+    assert arbitrary_result.ok
+    assert arbitrary_result.world_to_camera_matrix is not None
+    assert arbitrary_result.relative_focal_length is not None
+
+    def project_world_point(point: Vector3D) -> Point2D:
+        camera_point = arbitrary_result.world_to_camera_matrix.transform_point(point)
+        return solver_to_ui(
+            project_direction(camera_point, arbitrary_result.relative_focal_length / 2.0),
+            dimensions,
+        )
+
+    scaled_result = solve_2vp(
+        replace(
+            solve_input,
+            reference_distance=ReferenceDistanceInput(
+                segment_ui=Segment2D(
+                    project_world_point(Vector3D(-1.0, 0.0, 0.0)),
+                    project_world_point(Vector3D(3.0, 0.0, 0.0)),
+                ),
+                axis="+X",
+                distance=12.0,
+            ),
+        )
+    )
+
+    assert scaled_result.ok
+    assert scaled_result.camera_position is not None
+    assert scaled_result.reference_distance is not None
+    assert_close(scaled_result.reference_distance.measured_distance, 4.0)
+    assert_close(scaled_result.reference_distance.scale_factor, 3.0)
+    assert_close(scaled_result.camera_position.length(), 30.0)
+    assert_vector_close(
+        scaled_result.reference_distance.points_world[0],
+        Vector3D(-3.0, 0.0, 0.0),
+    )
+    assert_vector_close(
+        scaled_result.reference_distance.points_world[1],
+        Vector3D(9.0, 0.0, 0.0),
+    )
+    assert not any("scale are arbitrary" in warning for warning in scaled_result.warnings)
+
+
 def test_solver_warns_when_third_vanishing_point_is_at_infinity() -> None:
     diagonal = sqrt(0.5)
     first_direction = Vector3D(diagonal, 0.0, diagonal)
@@ -257,4 +305,3 @@ def test_solver_returns_error_for_invalid_options(
 
     assert not result.ok
     assert any(expected_error in error for error in result.errors)
-

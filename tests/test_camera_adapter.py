@@ -76,14 +76,14 @@ def successful_result():
     )
 
 
-def test_core_camera_matrix_conversion_flips_nuke_image_axes() -> None:
+def test_core_camera_matrix_conversion_uses_nuke_local_axes_directly() -> None:
     matrix = Matrix4.translation(Vector3D(1.0, 2.0, 3.0))
 
     converted = core_camera_to_nuke_matrix(matrix)
 
     assert converted.rows == (
-        (-1.0, 0.0, 0.0, 1.0),
-        (0.0, -1.0, 0.0, 2.0),
+        (1.0, 0.0, 0.0, 1.0),
+        (0.0, 1.0, 0.0, 2.0),
         (0.0, 0.0, 1.0, 3.0),
         (0.0, 0.0, 0.0, 1.0),
     )

@@ -32,14 +32,14 @@ DIMENSIONS = ImageDimensions(1920, 1080)
 PRINCIPAL_POINT = Point2D(0.5, 0.5)
 ORIGIN = Point2D(0.63, 0.34)
 FOCAL_PLANE_DISTANCE = 0.9
-CAMERA_X = Vector3D(0.8, 0.0, 0.6)
-CAMERA_Y = Vector3D(-0.36, 0.8, 0.48)
+CAMERA_X = Vector3D(-0.8, 0.0, -0.6)
+CAMERA_Y = Vector3D(0.36, -0.8, -0.48)
 
 
 def project_direction(direction: Vector3D) -> Point2D:
     return Point2D(
-        FOCAL_PLANE_DISTANCE * direction.x / direction.z,
-        FOCAL_PLANE_DISTANCE * direction.y / direction.z,
+        -FOCAL_PLANE_DISTANCE * direction.x / direction.z,
+        -FOCAL_PLANE_DISTANCE * direction.y / direction.z,
     )
 
 
@@ -82,8 +82,8 @@ def core_projection_to_ui(result, world_point: Vector3D) -> Point2D:
     assert result.world_to_camera_matrix is not None
     camera_point = result.world_to_camera_matrix.transform_point(world_point)
     solver_point = Point2D(
-        FOCAL_PLANE_DISTANCE * camera_point.x / camera_point.z,
-        FOCAL_PLANE_DISTANCE * camera_point.y / camera_point.z,
+        -FOCAL_PLANE_DISTANCE * camera_point.x / camera_point.z,
+        -FOCAL_PLANE_DISTANCE * camera_point.y / camera_point.z,
     )
     return solver_to_ui(solver_point, DIMENSIONS, PRINCIPAL_POINT)
 
@@ -122,9 +122,9 @@ def main() -> None:
         assert_close(actual, expected)
 
     core_camera_points = (
-        Vector3D(0.0, 0.0, FOCAL_PLANE_DISTANCE),
-        Vector3D(0.2, -0.1, 1.4),
-        Vector3D(-0.35, 0.25, 2.2),
+        Vector3D(0.0, 0.0, -FOCAL_PLANE_DISTANCE),
+        Vector3D(0.2, -0.1, -1.4),
+        Vector3D(-0.35, 0.25, -2.2),
     )
     world_points = [Vector3D(0.0, 0.0, 0.0)]
     world_points.extend(

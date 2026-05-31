@@ -2,7 +2,11 @@ from math import isclose
 
 import pytest
 
-from lens_solver.core.geometry import GeometryError, line_intersection
+from lens_solver.core.geometry import (
+    GeometryError,
+    line_intersection,
+    line_intersection_least_squares,
+)
 from lens_solver.core.models import Matrix4, Point2D, Segment2D, Vector2D, Vector3D
 
 
@@ -41,6 +45,19 @@ def test_line_intersection_rejects_zero_length_segment() -> None:
 
     with pytest.raises(GeometryError, match="zero-length"):
         line_intersection(first, second)
+
+
+def test_line_intersection_least_squares_uses_all_lines() -> None:
+    segments = (
+        Segment2D(Point2D(0.0, 0.0), Point2D(1.0, 1.0)),
+        Segment2D(Point2D(0.0, 2.0), Point2D(1.0, 2.0)),
+        Segment2D(Point2D(2.0, 0.0), Point2D(2.0, 1.0)),
+    )
+
+    intersection = line_intersection_least_squares(segments)
+
+    assert isclose(intersection.x, 2.0, abs_tol=1e-9)
+    assert isclose(intersection.y, 2.0, abs_tol=1e-9)
 
 
 def test_vector2_normalization_rejects_zero_vector() -> None:
@@ -84,4 +101,3 @@ def test_matrix_inverse_rejects_singular_matrix() -> None:
 
     with pytest.raises(GeometryError, match="singular"):
         matrix.inverse()
-

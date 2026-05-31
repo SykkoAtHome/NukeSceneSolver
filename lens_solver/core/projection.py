@@ -10,7 +10,7 @@ def solver_point_to_camera_ray(point: Point2D, focal_plane_distance: float) -> V
 
     if focal_plane_distance <= 0.0:
         raise GeometryError("Focal plane distance must be positive.")
-    return Vector3D(point.x, point.y, focal_plane_distance).normalized()
+    return Vector3D(point.x, point.y, -focal_plane_distance).normalized()
 
 
 def camera_direction_to_solver_point(
@@ -25,7 +25,6 @@ def camera_direction_to_solver_point(
     if abs(direction.z) <= tolerance:
         raise GeometryError("Camera direction projects to a vanishing point at infinity.")
     return Point2D(
-        focal_plane_distance * direction.x / direction.z,
-        focal_plane_distance * direction.y / direction.z,
+        -focal_plane_distance * direction.x / direction.z,
+        -focal_plane_distance * direction.y / direction.z,
     )
-

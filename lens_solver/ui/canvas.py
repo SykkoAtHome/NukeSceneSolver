@@ -6,7 +6,7 @@ from collections.abc import Iterable
 
 from PySide2 import QtCore, QtGui, QtWidgets
 
-from lens_solver.core import SolveResult
+from lens_solver.core import BOX_EDGES, SolveResult, box_axis_segments
 from lens_solver.core.models import Point2D, Segment2D, Vector3D
 from lens_solver.core.coordinates import ui_to_solver
 from lens_solver.core.projection import solver_point_to_camera_ray
@@ -24,6 +24,8 @@ DEFAULT_POSITIONS = {
     "vp2_b_start": Point2D(0.80, 0.80),
     "vp2_b_end": Point2D(0.61, 0.21),
     "origin": Point2D(0.5, 0.5),
+    "reference_start": Point2D(0.50, 0.50),
+    "reference_end": Point2D(0.65, 0.50),
     # 8 box vertices: v[x][y][z]
     "box_v000": Point2D(0.20, 0.80),
     "box_v100": Point2D(0.40, 0.80),
@@ -130,6 +132,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         # State
         self._grid_visible = True
         self._horizon_visible = True
+        self._reference_visible = False
         self._mode = "lines"
         self._undo_buffer: dict[str, Point2D] | None = None
         self._is_internal_update = False
@@ -170,6 +173,11 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._labels: dict[str, QtWidgets.QGraphicsSimpleTextItem] = {}
         self._grid_lines: list[QtWidgets.QGraphicsLineItem] = []
         self._box_lines: list[QtWidgets.QGraphicsLineItem] = []
+        horizon_pen = QtGui.QPen(QtGui.QColor("#ffcc66"), 1.0, QtCore.Qt.DashLine)
+        horizon_pen.setCosmetic(True)
+        self._horizon_line = self._scene.addLine(QtCore.QLineF(), horizon_pen)
+        self._horizon_line.setZValue(1.0)
+        self._horizon_line.setVisible(False)
 
         # Create handles and lines (temporarily disable updates during creation)
         self._is_internal_update = True
@@ -179,6 +187,14 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             self._create_segment("vp2_a", DEFAULT_POSITIONS["vp2_a_start"], DEFAULT_POSITIONS["vp2_a_end"], "#5ca8ff")
             self._create_segment("vp2_b", DEFAULT_POSITIONS["vp2_b_start"], DEFAULT_POSITIONS["vp2_b_end"], "#5ca8ff")
             self._handles["origin"] = self._create_handle(DEFAULT_POSITIONS["origin"], "#ffd45c")
+            self._create_segment(
+                "reference",
+                DEFAULT_POSITIONS["reference_start"],
+                DEFAULT_POSITIONS["reference_end"],
+                "#ff9f5c",
+            )
+            self._labels["reference"].setText("Reference")
+            self.set_reference_visible(False)
             
             # Create 8 box handles
             box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
@@ -197,12 +213,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
                 self._handles[name].signals.released.connect(self._on_box_released)
             
             # Create lines for the 2D user polygon (dashed)
-            box_edges = (
-                ("box_v000", "box_v100"), ("box_v000", "box_v010"), ("box_v100", "box_v110"), ("box_v010", "box_v110"),
-                ("box_v001", "box_v101"), ("box_v001", "box_v011"), ("box_v101", "box_v111"), ("box_v011", "box_v111"),
-                ("box_v000", "box_v001"), ("box_v100", "box_v101"), ("box_v010", "box_v011"), ("box_v110", "box_v111"),
-            )
-            for i, (v1, v2) in enumerate(box_edges):
+            for i, (v1, v2) in enumerate(BOX_EDGES):
                 name = f"box_edge_{i}"
                 pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 60), 1.0, QtCore.Qt.DashLine)
                 pen.setCosmetic(True)
@@ -292,6 +303,17 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
                 self._labels[name].setText(f"{axis2.strip('+-')} Axis")
         self._update_lines()
 
+    def set_reference_visible(self, visible: bool) -> None:
+        """Show reference-distance handles only while scale calibration is enabled."""
+        self._reference_visible = visible
+        for name in ("reference_start", "reference_end"):
+            if name in self._handles:
+                self._handles[name].setVisible(visible)
+        if "reference" in self._labels:
+            self._labels["reference"].setVisible(visible)
+        if "reference" in self._lines:
+            self._lines["reference"].setVisible(visible)
+
     def _unproject_length(self, ui_point: Point2D, world_axis: Vector3D, result: SolveResult) -> float:
         solver_pt = ui_to_solver(ui_point, result.image_dimensions, result.principal_point_ui)
         focal_plane_dist = result.relative_focal_length / 2.0
@@ -316,7 +338,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         if name == "Y": return Vector3D(0.0, sign, 0.0)
         return Vector3D(0.0, 0.0, sign)
 
-    def update_grid(self, result: SolveResult | None, axis1: str = "+X", axis2: str = "+Y") -> None:
+    def update_grid(self, result: SolveResult | None, axis1: str = "+X", axis2: str = "+Z") -> None:
         """Draw a perspective grid on the ground plane if the solve is valid."""
         # Clear existing grid and box lines
         while self._grid_lines:
@@ -324,6 +346,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         while self._box_lines:
             self._scene.removeItem(self._box_lines.pop())
 
+        self._update_horizon(result)
         if not result or not result.ok or not result.projection_matrix:
             return
 
@@ -431,6 +454,12 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._grid_btn.setChecked(True)
         self._grid_btn.setStyleSheet(self._hud_style)
         self._grid_btn.clicked.connect(self.toggle_grid)
+
+        self._horizon_btn = QtWidgets.QPushButton("Horizon")
+        self._horizon_btn.setCheckable(True)
+        self._horizon_btn.setChecked(True)
+        self._horizon_btn.setStyleSheet(self._hud_style)
+        self._horizon_btn.clicked.connect(self.toggle_horizon)
         
         self._reset_btn = QtWidgets.QPushButton("Reset")
         self._reset_btn.setStyleSheet(self._hud_style)
@@ -439,6 +468,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         hud_layout.addWidget(self._fit_btn)
         hud_layout.addWidget(self._100_btn)
         hud_layout.addWidget(self._grid_btn)
+        hud_layout.addWidget(self._horizon_btn)
         hud_layout.addWidget(self._reset_btn)
 
     def toggle_grid(self) -> None:
@@ -448,6 +478,15 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             self._grid_btn.setChecked(self._grid_visible)
         for line in self._grid_lines:
             line.setVisible(self._grid_visible)
+
+    def toggle_horizon(self) -> None:
+        """Toggle the horizon overlay calculated from the first two VPs."""
+        self._horizon_visible = not self._horizon_visible
+        if self._horizon_btn:
+            self._horizon_btn.setChecked(self._horizon_visible)
+        self._horizon_line.setVisible(
+            self._horizon_visible and not self._horizon_line.line().isNull()
+        )
 
     def reset_handles(self) -> None:
         """Reset handles to defaults or undo the last reset."""
@@ -552,24 +591,23 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         finally:
             self._is_internal_update = False
 
-    def vp1_segments(self) -> tuple[Segment2D, Segment2D]:
-        if getattr(self, "_mode", "lines") == "box":
-            return (
-                Segment2D(self._handles["box_v000"].relative_position(), self._handles["box_v100"].relative_position()),
-                Segment2D(self._handles["box_v010"].relative_position(), self._handles["box_v110"].relative_position()),
-            )
-        return self._segments("vp1_a", "vp1_b")
-
-    def vp2_segments(self) -> tuple[Segment2D, Segment2D]:
-        if getattr(self, "_mode", "lines") == "box":
-            return (
-                Segment2D(self._handles["box_v000"].relative_position(), self._handles["box_v010"].relative_position()),
-                Segment2D(self._handles["box_v100"].relative_position(), self._handles["box_v110"].relative_position()),
-            )
-        return self._segments("vp2_a", "vp2_b")
-
     def origin(self) -> Point2D:
         return self._handles["origin"].relative_position()
+
+    def reference_segment(self) -> Segment2D:
+        return self._segment("reference")
+
+    def match_box_corners(self) -> dict[str, Point2D]:
+        return {
+            name: self._handles[name].relative_position()
+            for name in (
+                "box_v000", "box_v100", "box_v010", "box_v110",
+                "box_v001", "box_v101", "box_v011", "box_v111",
+            )
+        }
+
+    def mode(self) -> str:
+        return self._mode
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API name
         super().resizeEvent(event)
@@ -662,16 +700,10 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         is_box = (getattr(self, "_mode", "lines") == "box")
         
         # 1. Update Box Edges visibility and positions
-        box_edges = (
-            ("box_v000", "box_v100"), ("box_v000", "box_v010"), ("box_v100", "box_v110"), ("box_v010", "box_v110"),
-            ("box_v001", "box_v101"), ("box_v001", "box_v011"), ("box_v101", "box_v111"), ("box_v011", "box_v111"),
-            ("box_v000", "box_v001"), ("box_v100", "box_v101"), ("box_v010", "box_v011"), ("box_v110", "box_v111"),
-        )
-        for i in range(12):
+        for i, (v1, v2) in enumerate(BOX_EDGES):
             name = f"box_edge_{i}"
             if name in self._lines:
                 if is_box:
-                    v1, v2 = box_edges[i]
                     if v1 in self._handles and v2 in self._handles:
                         self._lines[name].setLine(QtCore.QLineF(self._handles[v1].pos(), self._handles[v2].pos()))
                         self._lines[name].setVisible(True)
@@ -682,9 +714,12 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         for name, line in self._lines.items():
             if name.startswith("box_edge_"):
                 continue
+            if name == "reference" and not self._reference_visible:
+                line.setVisible(False)
+                continue
             
-            # Hide VP lines entirely in box mode
-            if is_box:
+            # Hide manual VP lines entirely in box mode. Reference line remains editable.
+            if is_box and name in ("vp1_a", "vp1_b", "vp2_a", "vp2_b"):
                 line.setVisible(False)
                 continue
 
@@ -729,18 +764,78 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             self._handles[f"{name}_end"].relative_position(),
         )
 
-    def vp1_segments(self) -> tuple[Segment2D, Segment2D]:
+    def vp1_segments(self) -> tuple[Segment2D, ...]:
         if getattr(self, "_mode", "lines") == "box":
-            return (
-                Segment2D(self._handles["box_v000"].relative_position(), self._handles["box_v100"].relative_position()),
-                Segment2D(self._handles["box_v010"].relative_position(), self._handles["box_v110"].relative_position()),
-            )
+            return box_axis_segments(self.match_box_corners(), 0)
         return self._segments("vp1_a", "vp1_b")
 
-    def vp2_segments(self) -> tuple[Segment2D, Segment2D]:
+    def vp2_segments(self) -> tuple[Segment2D, ...]:
         if getattr(self, "_mode", "lines") == "box":
-            return (
-                Segment2D(self._handles["box_v000"].relative_position(), self._handles["box_v010"].relative_position()),
-                Segment2D(self._handles["box_v100"].relative_position(), self._handles["box_v110"].relative_position()),
-            )
+            return box_axis_segments(self.match_box_corners(), 1)
         return self._segments("vp2_a", "vp2_b")
+
+    def _update_horizon(self, result: SolveResult | None) -> None:
+        if not result or not result.ok:
+            self._horizon_line.setVisible(False)
+            return
+        first, second, _ = result.vanishing_points_ui
+        if first is None or second is None:
+            self._horizon_line.setVisible(False)
+            return
+
+        width = self._plate_rect.width()
+        height = self._plate_rect.height()
+        first_point = QtCore.QPointF(
+            self._plate_rect.left() + first.x * width,
+            self._plate_rect.top() + first.y * height,
+        )
+        second_point = QtCore.QPointF(
+            self._plate_rect.left() + second.x * width,
+            self._plate_rect.top() + second.y * height,
+        )
+        clipped = self._clip_infinite_line_to_plate(first_point, second_point)
+        if clipped is None:
+            self._horizon_line.setVisible(False)
+            return
+        self._horizon_line.setLine(QtCore.QLineF(*clipped))
+        self._horizon_line.setVisible(self._horizon_visible)
+
+    def _clip_infinite_line_to_plate(
+        self,
+        first: QtCore.QPointF,
+        second: QtCore.QPointF,
+    ) -> tuple[QtCore.QPointF, QtCore.QPointF] | None:
+        dx = second.x() - first.x()
+        dy = second.y() - first.y()
+        if abs(dx) < 1e-9 and abs(dy) < 1e-9:
+            return None
+
+        left, right = self._plate_rect.left(), self._plate_rect.right()
+        top, bottom = self._plate_rect.top(), self._plate_rect.bottom()
+        candidates: list[QtCore.QPointF] = []
+
+        if abs(dx) >= 1e-9:
+            for x in (left, right):
+                y = first.y() + (x - first.x()) * dy / dx
+                if top - 1e-6 <= y <= bottom + 1e-6:
+                    candidates.append(QtCore.QPointF(x, y))
+        if abs(dy) >= 1e-9:
+            for y in (top, bottom):
+                x = first.x() + (y - first.y()) * dx / dy
+                if left - 1e-6 <= x <= right + 1e-6:
+                    candidates.append(QtCore.QPointF(x, y))
+
+        unique: list[QtCore.QPointF] = []
+        for point in candidates:
+            if not any(
+                abs(point.x() - existing.x()) < 1e-6
+                and abs(point.y() - existing.y()) < 1e-6
+                for existing in unique
+            ):
+                unique.append(point)
+        if len(unique) < 2:
+            return None
+        return max(
+            ((first_point, second_point) for first_point in unique for second_point in unique),
+            key=lambda pair: QtCore.QLineF(*pair).length(),
+        )

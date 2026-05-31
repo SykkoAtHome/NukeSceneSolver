@@ -1,9 +1,7 @@
 """Create or update a Nuke 15.1 Camera2 node from a core solve result.
 
-Nuke's Camera2 local camera axes differ from the core pinhole-camera axes:
-positive local X and Y project left and down through ``nukescripts.snap3d``.
-The explicit basis conversion below keeps that application-specific behavior
-outside the Nuke-independent solver.
+The core solver uses Nuke's classic local camera convention directly: local
+``-Z`` points forward, while local ``+X`` and ``+Y`` point right and up.
 """
 
 from __future__ import annotations
@@ -19,7 +17,7 @@ class CameraAdapterError(ValueError):
     """Raised when a solve result cannot be applied to a Camera2 node."""
 
 
-CORE_TO_NUKE_CAMERA_BASIS = Matrix4.scaling(Vector3D(-1.0, -1.0, 1.0))
+CORE_TO_NUKE_CAMERA_BASIS = Matrix4.identity()
 
 
 def core_camera_to_nuke_matrix(camera_to_world_matrix: Matrix4) -> Matrix4:

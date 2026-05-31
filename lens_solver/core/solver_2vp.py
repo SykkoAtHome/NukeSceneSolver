@@ -17,7 +17,7 @@ from lens_solver.core.coordinates import (
     solver_to_ui,
     ui_to_solver,
 )
-from lens_solver.core.geometry import line_intersection
+from lens_solver.core.geometry import line_intersection_least_squares
 from lens_solver.core.models import (
     DEFAULT_TOLERANCE,
     GeometryError,
@@ -29,6 +29,11 @@ from lens_solver.core.models import (
 from lens_solver.core.projection import (
     camera_direction_to_solver_point,
     solver_point_to_camera_ray,
+)
+from lens_solver.core.reference_distance import (
+    ReferenceDistanceCalibration,
+    ReferenceDistanceInput,
+    calibrate_reference_distance,
 )
 
 
@@ -48,14 +53,15 @@ AXIS_VECTORS = {
 class SolveInput:
     image_width: int
     image_height: int
-    vp1_segments: tuple[Segment2D, Segment2D]
-    vp2_segments: tuple[Segment2D, Segment2D]
+    vp1_segments: tuple[Segment2D, ...]
+    vp2_segments: tuple[Segment2D, ...]
     principal_point: Point2D | None = None
     origin: Point2D = DEFAULT_PRINCIPAL_POINT
     first_axis: str = "+X"
     second_axis: str = "+Y"
     sensor_width_mm: float = DEFAULT_SENSOR_WIDTH_MM
     camera_distance: float = DEFAULT_CAMERA_DISTANCE
+    reference_distance: ReferenceDistanceInput | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,6 +83,7 @@ class SolveResult:
     origin_ui: Point2D
     vanishing_points_ui: tuple[Point2D | None, Point2D | None, Point2D | None]
     vanishing_points_solver: tuple[Point2D | None, Point2D | None, Point2D | None]
+    reference_distance: ReferenceDistanceCalibration | None
     warnings: tuple[str, ...]
     errors: tuple[str, ...]
 
@@ -151,6 +158,22 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
         origin_camera_ray = solver_point_to_camera_ray(origin_solver, focal_plane_distance)
         origin_world_ray = camera_to_world_rotation.transform_direction(origin_camera_ray)
         camera_position = origin_world_ray * -solve_input.camera_distance
+        reference_distance: ReferenceDistanceCalibration | None = None
+        if solve_input.reference_distance is not None:
+            reference_distance = calibrate_reference_distance(
+                solve_input.reference_distance,
+                dimensions=dimensions,
+                principal_point=principal_point,
+                focal_plane_distance=focal_plane_distance,
+                camera_to_world_rotation=camera_to_world_rotation,
+                camera_position=camera_position,
+            )
+            camera_position = camera_position * reference_distance.scale_factor
+            warnings.extend(reference_distance.warnings)
+        else:
+            warnings.append(
+                "Camera distance and scene scale are arbitrary until a reference distance is supplied."
+            )
         camera_to_world_matrix = _with_translation(camera_to_world_rotation, camera_position)
         world_to_camera_matrix = camera_to_world_matrix.inverse()
 
@@ -170,18 +193,14 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
 
         sensor_height_mm = solve_input.sensor_width_mm * dimensions.height_relative_to_width
         focal_length_mm = focal_plane_distance * solve_input.sensor_width_mm
-        warnings.append(
-            "Camera distance and scene scale are arbitrary until a reference distance is supplied."
-        )
-
         # Build full projection matrix: P = K @ [R|t]
         # K maps camera-space points [Xc, Yc, Zc] to solver-plane [nx, ny]
         # Xc / Zc * focal_plane_distance, etc.
         # Note: focal_plane_distance is defined such that image height is 2.0 (from -1 to 1) 
         # in the solver coordinate system.
         k_matrix = Matrix4.from_rows((
-            (focal_plane_distance, 0.0, 0.0, 0.0),
-            (0.0, focal_plane_distance, 0.0, 0.0),
+            (-focal_plane_distance, 0.0, 0.0, 0.0),
+            (0.0, -focal_plane_distance, 0.0, 0.0),
             (0.0, 0.0, 1.0, 0.0),
             (0.0, 0.0, 1.0, 0.0)
         ))
@@ -207,6 +226,7 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
                 third_vp_ui,
             ),
             vanishing_points_solver=(first_vp_solver, second_vp_solver, third_vp_solver),
+            reference_distance=reference_distance,
             warnings=tuple(warnings),
             errors=(),
         )
@@ -229,14 +249,13 @@ def _parse_axis(axis: str) -> tuple[int, float]:
 
 
 def _intersect_ui_segments(
-    segments: tuple[Segment2D, Segment2D],
+    segments: tuple[Segment2D, ...],
     dimensions: ImageDimensions,
     principal_point: Point2D,
 ) -> Point2D:
-    first, second = segments
-    return line_intersection(
-        _ui_segment_to_solver(first, dimensions, principal_point),
-        _ui_segment_to_solver(second, dimensions, principal_point),
+    return line_intersection_least_squares(
+        _ui_segment_to_solver(segment, dimensions, principal_point)
+        for segment in segments
     )
 
 
@@ -328,6 +347,7 @@ def _error_result(
         origin_ui=origin,
         vanishing_points_ui=(None, None, None),
         vanishing_points_solver=(None, None, None),
+        reference_distance=None,
         warnings=tuple(warnings),
         errors=(error,),
     )

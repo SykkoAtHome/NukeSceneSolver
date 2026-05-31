@@ -49,10 +49,29 @@ prototype. Stage 6 remains open until VP lines and origin are edited directly
 over the active Nuke Viewer image. The dockable panel should remain focused on
 settings, solver messages, and camera actions.
 
-The next milestone after the Viewer overlay is `Box Match`: a constrained
-wireframe cuboid for fitting buildings and interiors by dragging control
-corners over the Viewer image. Manual VP lines remain available as the baseline
-and diagnostic mode.
+The panel prototype also contains `Box Match`: a wireframe cuboid for fitting
+buildings and interiors by dragging control corners over the plate. Manual VP
+lines remain available as the baseline and diagnostic mode.
+
+Stage 8 reference-distance work is in progress. Enable `Use reference
+distance`, choose the world axis, enter the known length, and place the orange
+reference line on the corresponding scene edge through `Scene Origin`. The
+solver rescales camera translation without changing perspective. The canvas
+also exposes a `Horizon` HUD toggle and the panel can create a scene grid,
+origin card, or coarse match-box cuboid as a scaled Nuke `Cube` node. Box Match
+does not assume equal side lengths. These UI actions still require
+interactive validation inside Nuke 15.1.
+
+Nuke uses `+Y` as world up. The panel therefore defaults to `+X` and `+Z` for
+the two ground-plane vanishing points. Scene-grid and origin-marker cards are
+rotated onto the `X/Z` ground plane, while the exported match-box height is
+reconstructed along `+Y`. Scene grid is always anchored at the independent
+yellow `Scene Origin`. `Match box base offset` supplies the independent base
+plane constraint needed for absolute match-box placement; with the default
+`+X`/`+Z` ground axes it is the base Y coordinate. It does not move the scene
+grid. When a Box Match admits an equivalent floor-reflected solution, the
+solver prefers the Nuke camera placement above the `X/Z` floor in the `+Y`
+half-space.
 
 Run the Nuke integration checks from the repository root:
 
@@ -74,7 +93,9 @@ logic is covered by the regular unit tests.
 - `relative_focal_length` follows
   `focal_mm = 0.5 * sensor_width_mm * relative_focal_length`.
 - Matrices are row-major and transform column vectors.
-- `camera_to_world_matrix` maps solver camera-space points into world space.
+- `camera_to_world_matrix` maps Nuke-compatible camera-space points into world
+  space. Local `-Z` points forward, while local `+X` and `+Y` point right and
+  up.
 - Without a reference distance, camera position and scene scale are arbitrary.
 
 ## Current limitations
