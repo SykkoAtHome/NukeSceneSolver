@@ -92,7 +92,10 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self.setScene(self._scene)
         self.setRenderHints(QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform)
         self.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#202225")))
-        self.setMinimumHeight(320)
+        
+        # Initial aspect ratio hint: 16:9
+        self.setMinimumWidth(400)
+        self.setMinimumHeight(225) 
         
         # Interactive behavior
         self.setTransformationAnchor(QtWidgets.QGraphicsView.AnchorUnderMouse)
@@ -117,6 +120,16 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._create_segment("vp2_b", Point2D(0.80, 0.80), Point2D(0.61, 0.21), "#5ca8ff")
         self._handles["origin"] = self._create_handle(Point2D(0.5, 0.5), "#ffd45c")
         self.set_plate(1920, 1080)
+
+    def fit_view(self) -> None:
+        """Fit the entire plate into the current view."""
+        self.fitInView(self._plate_rect, QtCore.Qt.KeepAspectRatio)
+
+    def reset_zoom(self) -> None:
+        """Reset zoom to 1:1 pixel ratio."""
+        self.resetTransform()
+        # Center the view
+        self.centerOn(self._plate_rect.center())
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802 - Qt API name
         zoom_in_factor = 1.25
@@ -177,7 +190,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             self._placeholder.setPos(width * 0.03, height * 0.05)
             self._placeholder.show()
         self._update_lines()
-        self.fitInView(self._plate_rect, QtCore.Qt.KeepAspectRatio)
+        self.fit_view()
 
     def vp1_segments(self) -> tuple[Segment2D, Segment2D]:
         return self._segments("vp1_a", "vp1_b")
