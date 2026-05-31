@@ -1,6 +1,7 @@
 """Nuke-independent geometry and camera-solving foundations."""
 
 from scene_solver.core.coordinates import (
+    DEFAULT_PRINCIPAL_POINT,
     ImageDimensions,
     pixel_to_ui,
     solver_to_ui,
@@ -38,6 +39,7 @@ __all__ = [
     "BOX_EDGES",
     "BoxDimensionCalibration",
     "BoxDimensionInput",
+    "DEFAULT_PRINCIPAL_POINT",
     "ImageDimensions",
     "Matrix4",
     "Point2D",

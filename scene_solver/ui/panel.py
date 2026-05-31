@@ -9,6 +9,7 @@ from PySide2 import QtCore, QtGui, QtWidgets
 from scene_solver.core import (
     BoxDimensionCalibration,
     BoxDimensionInput,
+    DEFAULT_PRINCIPAL_POINT,
     GeometryError,
     SolveInput,
     SolveResult,
