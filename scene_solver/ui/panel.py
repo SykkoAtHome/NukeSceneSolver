@@ -250,6 +250,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._set_row_visible(self._focal_length_row, is_1vp)
         self._focal_length.setEnabled(is_1vp)
         
+        # Box specific
+        self._set_row_visible(self._base_offset_row, is_box)
+        self._match_box_button.setVisible(is_box)
+        
         self._on_pp_offset_toggled()
         self._update_scale_controls()
         self._refresh_solution()
@@ -292,6 +296,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._box_dimension_axis.setEnabled(show_box_scale)
         self._set_row_visible(self._box_dim_row, show_box_scale)
         self._box_dimension_length.setEnabled(show_box_scale)
+        
+        # Only show Box Scale mode in the combo if we are in Box mode? 
+        # Actually, let's keep it visible but maybe warn if selected in other modes.
+        # The existing _on_scale_mode_changed already forces mode to "Box" if box scale is selected.
         
         self._canvas.set_reference_visible(False)
 
