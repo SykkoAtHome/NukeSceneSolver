@@ -106,6 +106,18 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self.setRenderHints(QtGui.QPainter.Antialiasing | QtGui.QPainter.SmoothPixmapTransform)
         self.setBackgroundBrush(QtGui.QBrush(QtGui.QColor("#202225")))
         
+        # State
+        self._grid_visible = True
+        self._undo_buffer: dict[str, Point2D] | None = None
+        self._is_internal_update = False
+        
+        # HUD Elements placeholder
+        self._fit_btn = None
+        self._100_btn = None
+        self._grid_btn = None
+        self._reset_btn = None
+        self._hud_style = ""
+        
         # Initial aspect ratio hint: 16:9
         self.setMinimumWidth(400)
         self.setMinimumHeight(225) 
@@ -125,32 +137,49 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._placeholder.setDefaultTextColor(QtGui.QColor("#b8bcc2"))
         self._placeholder.setZValue(1.0)
 
+        # Labels and Lines containers
         self._handles: dict[str, _HandleItem] = {}
         self._lines: dict[str, QtWidgets.QGraphicsLineItem] = {}
         self._labels: dict[str, QtWidgets.QGraphicsSimpleTextItem] = {}
         self._grid_lines: list[QtWidgets.QGraphicsLineItem] = []
-        self._grid_visible = True
-        self._undo_buffer: dict[str, Point2D] | None = None
-        self._is_internal_update = False
-        
-        self._create_segment("vp1_a", Point2D(0.12, 0.23), Point2D(0.77, 0.34), "#ff5c5c")
-        self._create_segment("vp1_b", Point2D(0.20, 0.70), Point2D(0.95, 0.59), "#ff5c5c")
-        self._create_segment("vp2_a", Point2D(0.30, 0.40), Point2D(0.25, 0.14), "#5ca8ff")
-        self._create_segment("vp2_b", Point2D(0.80, 0.80), Point2D(0.61, 0.21), "#5ca8ff")
-        self._handles["origin"] = self._create_handle(Point2D(0.5, 0.5), "#ffd45c")
+
+        # Create handles and lines (temporarily disable updates during creation)
+        self._is_internal_update = True
+        try:
+            self._create_segment("vp1_a", DEFAULT_POSITIONS["vp1_a_start"], DEFAULT_POSITIONS["vp1_a_end"], "#ff5c5c")
+            self._create_segment("vp1_b", DEFAULT_POSITIONS["vp1_b_start"], DEFAULT_POSITIONS["vp1_b_end"], "#ff5c5c")
+            self._create_segment("vp2_a", DEFAULT_POSITIONS["vp2_a_start"], DEFAULT_POSITIONS["vp2_a_end"], "#5ca8ff")
+            self._create_segment("vp2_b", DEFAULT_POSITIONS["vp2_b_start"], DEFAULT_POSITIONS["vp2_b_end"], "#5ca8ff")
+            self._handles["origin"] = self._create_handle(DEFAULT_POSITIONS["origin"], "#ffd45c")
+        finally:
+            self._is_internal_update = False
+            
+        # Add Origin label
+        self._origin_label = QtWidgets.QGraphicsSimpleTextItem("Scene Origin (0,0,0)")
+        self._origin_label.setBrush(QtGui.QBrush(QtGui.QColor("#ffd45c")))
+        self._origin_label.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+        self._origin_label.setZValue(4.0)
+        font = self._origin_label.font()
+        font.setPixelSize(10)
+        font.setBold(True)
+        self._origin_label.setFont(font)
+        self._scene.addItem(self._origin_label)
         
         self._setup_hud()
         self.set_plate(1920, 1080)
+        self._update_lines() # Force initial positions
 
     def set_axis_labels(self, axis1: str, axis2: str) -> None:
         """Update labels to reflect assigned world axes."""
         for name in ("vp1_a", "vp1_b"):
-            self._labels[name].setText(f"{axis1.strip('+-')} Axis")
+            if name in self._labels:
+                self._labels[name].setText(f"{axis1.strip('+-')} Axis")
         for name in ("vp2_a", "vp2_b"):
-            self._labels[name].setText(f"{axis2.strip('+-')} Axis")
+            if name in self._labels:
+                self._labels[name].setText(f"{axis2.strip('+-')} Axis")
         self._update_lines()
 
-    def update_grid(self, result: SolveResult | None) -> None:
+    def update_grid(self, result: SolveResult | None, axis1: str = "+X", axis2: str = "+Y") -> None:
         """Draw a perspective grid on the ground plane if the solve is valid."""
         # Clear existing grid
         while self._grid_lines:
@@ -159,10 +188,6 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         if not self._grid_visible or not result or not result.ok or not result.projection_matrix:
             return
 
-        # Simple grid: 10x10 units on the ground plane (Z=0 if Y is up, or Y=0 if Z is up)
-        # We need to know which axis is "up".
-        # For simplicity, let's assume world plane formed by axis1 and axis2.
-        
         pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 80), 1.0)
         pen.setCosmetic(True)
         
@@ -170,41 +195,50 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         w, h = self._plate_rect.width(), self._plate_rect.height()
 
         def project(xw: float, yw: float, zw: float) -> QtCore.QPointF | None:
-            # result.projection_matrix.rows is a tuple of tuples
             p = (xw, yw, zw, 1.0)
             out = [0.0, 0.0, 0.0, 0.0]
             for i in range(4):
                 row = proj.rows[i]
                 for j in range(4):
                     out[i] += row[j] * p[j]
-            
             if abs(out[3]) < 1e-6: return None
-            
             nx = out[0] / out[3]
             ny = out[1] / out[3]
-            
             return QtCore.QPointF(
                 self._plate_rect.left() + (nx + 1.0) * 0.5 * w,
                 self._plate_rect.top() + (1.0 - (ny + 1.0) * 0.5) * h
             )
 
+        # Map grid coords [u, v] to world [x, y, z] based on selected axes
+        try:
+            ax1_name = axis1.strip("+-")
+            ax2_name = axis2.strip("+-")
+            ax_map = {"X": 0, "Y": 1, "Z": 2}
+            ax1_idx = ax_map[ax1_name]
+            ax2_idx = ax_map[ax2_name]
+        except (KeyError, AttributeError):
+            return
+
         steps = 10
         size = 5.0
         for i in range(steps + 1):
             val = -size + (i * size * 2.0 / steps)
-            # Lines along Axis 1
-            p_start = project(val, -size, 0)
-            p_end = project(val, size, 0)
-            if p_start and p_end:
-                line = self._scene.addLine(QtCore.QLineF(p_start, p_end), pen)
+            # Lines along ax1
+            p3s, p3e = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+            p3s[ax1_idx] = val; p3s[ax2_idx] = -size
+            p3e[ax1_idx] = val; p3e[ax2_idx] = size
+            ps, pe = project(*p3s), project(*p3e)
+            if ps and pe:
+                line = self._scene.addLine(QtCore.QLineF(ps, pe), pen)
                 line.setZValue(0.5)
                 self._grid_lines.append(line)
-                
-            # Lines along Axis 2
-            p_start = project(-size, val, 0)
-            p_end = project(size, val, 0)
-            if p_start and p_end:
-                line = self._scene.addLine(QtCore.QLineF(p_start, p_end), pen)
+            # Lines along ax2
+            p3s, p3e = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
+            p3s[ax2_idx] = val; p3s[ax1_idx] = -size
+            p3e[ax2_idx] = val; p3e[ax1_idx] = size
+            ps, pe = project(*p3s), project(*p3e)
+            if ps and pe:
+                line = self._scene.addLine(QtCore.QLineF(ps, pe), pen)
                 line.setZValue(0.5)
                 self._grid_lines.append(line)
 
@@ -261,7 +295,8 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
     def toggle_grid(self) -> None:
         """Toggle perspective grid visibility."""
         self._grid_visible = not self._grid_visible
-        self._grid_btn.setChecked(self._grid_visible)
+        if self._grid_btn:
+            self._grid_btn.setChecked(self._grid_visible)
         for line in self._grid_lines:
             line.setVisible(self._grid_visible)
 
@@ -270,23 +305,23 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._is_internal_update = True
         try:
             if self._undo_buffer is None:
-                # First click: Store current state and reset to defaults
                 self._undo_buffer = {
                     name: h.relative_position() for name, h in self._handles.items()
                 }
                 for name, pos in DEFAULT_POSITIONS.items():
                     self._handles[name].set_relative_position(pos)
-                self._reset_btn.setText("Undo Reset")
-                self._reset_btn.setStyleSheet(
-                    self._hud_style + " QPushButton { color: #ffcc66; }"
-                )
+                if self._reset_btn:
+                    self._reset_btn.setText("Undo Reset")
+                    self._reset_btn.setStyleSheet(
+                        self._hud_style + " QPushButton { color: #ffcc66; }"
+                    )
             else:
-                # Second click: Restore from buffer
                 for name, pos in self._undo_buffer.items():
                     self._handles[name].set_relative_position(pos)
                 self._undo_buffer = None
-                self._reset_btn.setText("Reset")
-                self._reset_btn.setStyleSheet(self._hud_style)
+                if self._reset_btn:
+                    self._reset_btn.setText("Reset")
+                    self._reset_btn.setStyleSheet(self._hud_style)
         finally:
             self._is_internal_update = False
 
@@ -347,7 +382,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             self._scene.setSceneRect(self._plate_rect)
             for name, handle in self._handles.items():
                 handle.set_plate_rect(self._plate_rect)
-                handle.set_relative_position(relative_positions[name])
+                handle.set_relative_position(relative_positions.get(name, Point2D(0.5, 0.5)))
             if pixmap is not None and not pixmap.isNull():
                 scaled = pixmap.scaled(
                     width,
@@ -393,7 +428,6 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         line.setZValue(2.0)
         self._lines[name] = line
         
-        # Add label
         label = QtWidgets.QGraphicsSimpleTextItem("?")
         label.setBrush(QtGui.QBrush(QtGui.QColor(color)))
         label.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
@@ -418,36 +452,40 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         if not self._is_internal_update and self._undo_buffer is not None:
             # User moved something after a reset: invalidate undo
             self._undo_buffer = None
-            self._reset_btn.setText("Reset")
-            self._reset_btn.setStyleSheet(self._hud_style)
+            if self._reset_btn:
+                self._reset_btn.setText("Reset")
+                self._reset_btn.setStyleSheet(self._hud_style)
+
+        # Update Origin label position
+        if hasattr(self, "_origin_label") and "origin" in self._handles:
+            origin_pos = self._handles["origin"].pos()
+            self._origin_label.setPos(origin_pos.x() + 10, origin_pos.y() + 10)
 
         self._update_lines()
         self.changed.emit()
 
     def _update_lines(self) -> None:
         for name, line in self._lines.items():
+            if f"{name}_start" not in self._handles or f"{name}_end" not in self._handles:
+                continue
             start_handle = self._handles[f"{name}_start"]
             end_handle = self._handles[f"{name}_end"]
-            label = self._labels[name]
+            label = self._labels.get(name)
             
             p1 = start_handle.pos()
             p2 = end_handle.pos()
-            
-            # Vector from start to end
             dx = p2.x() - p1.x()
             dy = p2.y() - p1.y()
             length = (dx*dx + dy*dy)**0.5
             
-            # Update label position (center of segment)
-            center = QtCore.QPointF(p1.x() + dx * 0.5, p1.y() + dy * 0.5)
-            # Offset label so it's centered on the point
-            rect = label.boundingRect()
-            label.setPos(center.x() - rect.width() * 0.5, center.y() - rect.height() * 0.5)
+            if label:
+                center = QtCore.QPointF(p1.x() + dx * 0.5, p1.y() + dy * 0.5)
+                rect = label.boundingRect()
+                label.setPos(center.x() - rect.width() * 0.5, center.y() - rect.height() * 0.5)
             
             if length > HANDLE_RADIUS * 2.0:
                 inv_scale = 1.0 / self.transform().m11()
                 scene_offset = HANDLE_RADIUS * inv_scale
-                
                 if length > scene_offset * 2.0:
                     ratio = scene_offset / length
                     p1_offset = QtCore.QPointF(p1.x() + dx * ratio, p1.y() + dy * ratio)

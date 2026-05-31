@@ -155,7 +155,7 @@ class LensSolverPanel(QtWidgets.QWidget):
             self._show_error(" ".join(self._last_result.errors))
             
         # Draw perspective grid on canvas
-        self._canvas.update_grid(self._last_result)
+        self._canvas.update_grid(self._last_result, axis1, axis2)
         
         return self._last_result
 
