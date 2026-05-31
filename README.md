@@ -53,14 +53,13 @@ The panel prototype also contains `Box Match`: a wireframe cuboid for fitting
 buildings and interiors by dragging control corners over the plate. Manual VP
 lines remain available as the baseline and diagnostic mode.
 
-Stage 8 reference-distance work is in progress. Enable `Use reference
-distance`, choose the world axis, enter the known length, and place the orange
-reference line on the corresponding scene edge through `Scene Origin`. The
-solver rescales camera translation without changing perspective. The canvas
-also exposes a `Horizon` HUD toggle and the panel can create a scene grid,
-origin card, or coarse match-box cuboid as a scaled Nuke `Cube` node. Box Match
-does not assume equal side lengths. These UI actions still require
-interactive validation inside Nuke 15.1.
+Stage 8 reference-distance work is complete. Enable `Use reference distance`,
+choose the world axis, enter the known length, and place the orange reference
+line on the corresponding scene edge through `Scene Origin`. The solver
+rescales camera translation without changing perspective. The canvas also
+exposes a `Horizon` HUD toggle and the panel can create a scene grid, origin
+card, or coarse match-box cuboid as a scaled Nuke `Cube` node. Box Match does
+not assume equal side lengths.
 
 Nuke uses `+Y` as world up. The panel therefore defaults to `+X` and `+Z` for
 the two ground-plane vanishing points. Scene-grid and origin-marker cards are

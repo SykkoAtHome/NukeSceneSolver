@@ -48,9 +48,11 @@ nuke_LensSolver/
 - Etap `5`: zakończony dla centralnego principal point wymaganego przez MVP.
 - Etap `6`: zakończony. Narzędzie operuje jako dockowalny panel PySide2 z interaktywną kanwą, obsługą zoomu/panningu, etykietami osi, siatką podłogi oraz kontrolkami HUD (Fit, 1:1, Grid, Reset).
 - Etap `7`: zakończony. Dodano tryb dopasowania przez manipulację widocznymi krawędziami prostopadłościanu 3D na kanwie panelu (Box Match mode) z wyliczaniem linii w oparciu o solve. Niezależny Scene Origin pozwala na pozycjonowanie świata poza Boxem.
-- Etap `8`: w trakcie. Dodano linię referencyjną, overlay horyzontu,
-  skalowanie translacji kamery oraz akcje eksportu helperów sceny. Pozostaje
-  walidacja interaktywna w Nuke 15.1.
+- Etap `8`: zakończony. Dodano linię referencyjną, overlay horyzontu,
+  skalowanie translacji kamery oraz akcje eksportu helperów sceny. Walidacja
+  interaktywna w Nuke 15.1 objęła idealny cube oraz niesześcienny cuboid z inną
+  kamerą.
+- Następny krok: Etap `9` (Principal Point i Optyka).
 
 ---
 

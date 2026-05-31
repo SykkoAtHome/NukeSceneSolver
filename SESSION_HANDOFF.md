@@ -58,8 +58,8 @@ Implemented:
   - helper-node export buttons,
   - explicit `Match box base offset`.
 
-Stage 8 is in progress: core behavior and helper export exist, while broader
-interactive validation in Nuke is still required.
+Stage 8 is complete. Core behavior, helper export and representative manual
+validation in Nuke are complete.
 
 ## Coordinate conventions
 
@@ -213,6 +213,13 @@ Manual Nuke validation completed by the user for `nuke_test_01`:
 
 The small focal difference is expected from manual handle placement.
 
+Manual Nuke validation also completed successfully for `nuke_test_03`. This is
+the representative non-uniform case: it uses a different camera and a cuboid
+whose side lengths are not equal. The user confirmed that the complete export
+workflow works correctly.
+
+`nuke_test_02` remains covered by the synthetic ground-truth regression suite.
+
 ## Camera2 limitations
 
 - Central principal point `(0.5, 0.5)` is supported.
@@ -243,13 +250,4 @@ discovery. Do not add a second Lens Solver import to the user's `.nuke/menu.py`.
 
 ## Next work
 
-Continue manual validation with `nuke_test_02` and `nuke_test_03`, especially:
-
-- non-uniform cuboid export,
-- square world-grid cells under perspective,
-- independent Scene Origin,
-- `Match box base offset = -0.5`,
-- camera placement above the `X/Z` floor.
-
-After stage 8 validation, continue with stage 9 principal-point and optics work
-from `PLAN.md`.
+Continue with stage 9 principal-point and optics work from `PLAN.md`.
