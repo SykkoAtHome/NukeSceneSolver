@@ -131,16 +131,20 @@ def test_update_camera_rejects_parented_camera() -> None:
         update_camera(FakeCamera(parented=True), successful_result())
 
 
-def test_update_camera_rejects_off_center_principal_point() -> None:
+def test_update_camera_sets_win_translate_for_off_center_principal_point() -> None:
     result = solve_2vp(
         SolveInput(
             image_width=1920,
             image_height=1080,
             vp1_segments=segments_for(Point2D(1.7, 0.5)),
             vp2_segments=segments_for(Point2D(-0.175, -2.1666666666666665)),
-            principal_point=Point2D(0.6, 0.7),
+            principal_point=Point2D(0.65, 0.38),
         )
     )
+    camera = FakeCamera()
 
-    with pytest.raises(CameraAdapterError, match="Off-center principal"):
-        update_camera(FakeCamera(), result)
+    update_camera(camera, result)
+
+    assert result.ok
+    assert camera["win_translate"].values[0] == pytest.approx((0.5 - 0.65) * 2.0)
+    assert camera["win_translate"].values[1] == pytest.approx((0.38 - 0.5) * 2.0)

@@ -68,16 +68,29 @@ class SceneSolverPanel(QtWidgets.QWidget):
 
         options = QtWidgets.QFormLayout()
         self._mode_combo = QtWidgets.QComboBox()
-        self._mode_combo.addItems(["Lines", "Box"])
+        self._mode_combo.addItems(["Lines", "Box", "3VP", "1VP"])
         self._first_axis = QtWidgets.QComboBox()
         self._first_axis.addItems(AXES)
         self._second_axis = QtWidgets.QComboBox()
         self._second_axis.addItems(AXES)
         self._second_axis.setCurrentText("+Z")
+        self._third_axis = QtWidgets.QComboBox()
+        self._third_axis.addItems(AXES)
+        self._third_axis.setCurrentText("+Y")
+        
+        self._auto_pp = QtWidgets.QCheckBox("Auto Principal Point (3VP only)")
+        self._auto_pp.setChecked(True)
+        
         self._sensor_width = QtWidgets.QDoubleSpinBox()
         self._sensor_width.setRange(1.0, 200.0)
         self._sensor_width.setDecimals(3)
         self._sensor_width.setValue(36.0)
+        
+        self._focal_length = QtWidgets.QDoubleSpinBox()
+        self._focal_length.setRange(1.0, 2000.0)
+        self._focal_length.setDecimals(3)
+        self._focal_length.setValue(50.0)
+        
         self._camera_distance = QtWidgets.QDoubleSpinBox()
         self._camera_distance.setRange(0.01, 1000000.0)
         self._camera_distance.setDecimals(3)
@@ -110,12 +123,20 @@ class SceneSolverPanel(QtWidgets.QWidget):
         options.addRow("Matching Mode", self._mode_combo)
         options.addRow("First VP axis", self._first_axis)
         options.addRow("Second VP axis", self._second_axis)
+        options.addRow("Third VP axis", self._third_axis)
+        options.addRow("", self._auto_pp)
 
         sensor_width_row = QtWidgets.QHBoxLayout()
         sensor_width_row.addWidget(self._sensor_width)
         sensor_width_row.addWidget(QtWidgets.QLabel("mm"))
         sensor_width_row.addStretch(1)
         options.addRow("Sensor width", sensor_width_row)
+
+        focal_length_row = QtWidgets.QHBoxLayout()
+        focal_length_row.addWidget(self._focal_length)
+        focal_length_row.addWidget(QtWidgets.QLabel("mm"))
+        focal_length_row.addStretch(1)
+        options.addRow("Focal length", focal_length_row)
 
         options.addRow("Scene scale mode", self._scale_mode)
 
@@ -168,7 +189,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._canvas.changed.connect(self._refresh_solution)
         self._first_axis.currentTextChanged.connect(self._refresh_solution)
         self._second_axis.currentTextChanged.connect(self._refresh_solution)
+        self._third_axis.currentTextChanged.connect(self._refresh_solution)
+        self._auto_pp.toggled.connect(self._refresh_solution)
         self._sensor_width.valueChanged.connect(self._refresh_solution)
+        self._focal_length.valueChanged.connect(self._refresh_solution)
         self._camera_distance.valueChanged.connect(self._refresh_solution)
         self._scale_mode.currentTextChanged.connect(self._on_scale_mode_changed)
         self._box_dimension_axis.currentTextChanged.connect(self._refresh_solution)
@@ -179,12 +203,16 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._grid_button.clicked.connect(self._create_scene_grid)
         self._origin_card_button.clicked.connect(self._create_origin_card)
         self._match_box_button.clicked.connect(self._create_match_box)
+        self._focal_length.setEnabled(False)
         self._update_scale_controls()
 
     def _on_mode_changed(self, mode_str: str) -> None:
-        self._canvas.set_mode(mode_str.lower())
-        if mode_str.lower() != "box" and self._uses_box_dimension():
+        mode = mode_str.lower()
+        self._canvas.set_mode(mode)
+        if mode != "box" and self._uses_box_dimension():
             self._scale_mode.setCurrentText(ARBITRARY_SCALE_MODE)
+        self._focal_length.setEnabled(mode == "1vp")
+        self._update_scale_controls()
         self._refresh_solution()
 
     def _on_scale_mode_changed(self, *args) -> None:
@@ -237,22 +265,34 @@ class SceneSolverPanel(QtWidgets.QWidget):
         # Update canvas labels based on current axis selection
         axis1 = self._first_axis.currentText()
         axis2 = self._second_axis.currentText()
-        self._canvas.set_axis_labels(axis1, axis2)
+        axis3 = self._third_axis.currentText()
+        self._canvas.set_axis_labels(axis1, axis2, axis3)
         self._last_box_dimension = None
 
+        principal_point = self._canvas.principal_point()
+        if self._mode_combo.currentText() == "3VP" and self._auto_pp.isChecked():
+            principal_point = None
+
+        mode_str = self._mode_combo.currentText().lower()
         solve_input = SolveInput(
             image_width=dimensions.width,
             image_height=dimensions.height,
             vp1_segments=self._canvas.vp1_segments(),
             vp2_segments=self._canvas.vp2_segments(),
+            vp3_segments=self._canvas.vp3_segments(),
+            principal_point=principal_point,
             origin=self._canvas.origin(),
             first_axis=axis1,
             second_axis=axis2,
+            third_axis=axis3,
             sensor_width_mm=self._sensor_width.value(),
+            known_focal_length_mm=self._focal_length.value() if mode_str == "1vp" else None,
             camera_distance=self._camera_distance.value(),
+            mode=mode_str,
         )
         scale_error = None
-        if self._canvas.mode() == "box":
+        mode = self._canvas.mode()
+        if mode == "box":
             corners = self._canvas.match_box_corners()
             if self._uses_box_dimension():
                 try:
@@ -274,6 +314,18 @@ class SceneSolverPanel(QtWidgets.QWidget):
                 self._last_result = solve_box_match(solve_input, corners)
         else:
             self._last_result = solve_2vp(solve_input)
+        
+        if self._last_result.ok:
+            # Update canvas principal point if it was auto-calculated
+            if principal_point is None:
+                self._canvas._is_internal_update = True
+                try:
+                    self._canvas._handles["principal_point"].set_relative_position(
+                        self._last_result.principal_point_ui
+                    )
+                finally:
+                    self._canvas._is_internal_update = False
+        
         if scale_error is not None:
             self._show_error(scale_error)
         elif self._last_result.ok:

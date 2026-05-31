@@ -59,8 +59,15 @@ def update_camera(camera: Any, result: SolveResult) -> Any:
     camera["winroll"].setValue(0.0)
     camera["win_scale"].setValue(1.0, 0)
     camera["win_scale"].setValue(1.0, 1)
-    camera["win_translate"].setValue(0.0, 0)
-    camera["win_translate"].setValue(0.0, 1)
+    
+    # Map principal point shift to win_translate.
+    # Nuke win_translate 1.0 shifts the window by the full aperture width.
+    # Our UI coordinates are [0, 1], so shift from center (0.5) is multiplied by 2.
+    win_tx = (0.5 - result.principal_point_ui.x) * 2.0
+    win_ty = (result.principal_point_ui.y - 0.5) * 2.0
+    camera["win_translate"].setValue(win_tx, 0)
+    camera["win_translate"].setValue(win_ty, 1)
+    
     camera["useMatrix"].setValue(True)
     for index, value in enumerate(_flatten_rows(matrix)):
         camera["matrix"].setValue(value, index)
@@ -87,13 +94,6 @@ def _validate_result(result: SolveResult) -> None:
     )
     if any(value is None for value in required_values):
         raise CameraAdapterError("Solve result is missing required camera data.")
-    if not (
-        isclose(result.principal_point_ui.x, 0.5, abs_tol=1e-12)
-        and isclose(result.principal_point_ui.y, 0.5, abs_tol=1e-12)
-    ):
-        raise CameraAdapterError(
-            "Off-center principal points are not supported by the Camera2 adapter yet."
-        )
 
 
 def _flatten_rows(matrix: Matrix4) -> tuple[float, ...]:

@@ -23,7 +23,12 @@ DEFAULT_POSITIONS = {
     "vp2_a_end": Point2D(0.25, 0.14),
     "vp2_b_start": Point2D(0.80, 0.80),
     "vp2_b_end": Point2D(0.61, 0.21),
+    "vp3_a_start": Point2D(0.5, 0.1),
+    "vp3_a_end": Point2D(0.5, 0.4),
+    "vp3_b_start": Point2D(0.4, 0.1),
+    "vp3_b_end": Point2D(0.4, 0.4),
     "origin": Point2D(0.5, 0.5),
+    "principal_point": Point2D(0.5, 0.5),
     "reference_start": Point2D(0.50, 0.50),
     "reference_end": Point2D(0.65, 0.50),
     # 8 box vertices: v[x][y][z]
@@ -186,7 +191,22 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             self._create_segment("vp1_b", DEFAULT_POSITIONS["vp1_b_start"], DEFAULT_POSITIONS["vp1_b_end"], "#ff5c5c")
             self._create_segment("vp2_a", DEFAULT_POSITIONS["vp2_a_start"], DEFAULT_POSITIONS["vp2_a_end"], "#5ca8ff")
             self._create_segment("vp2_b", DEFAULT_POSITIONS["vp2_b_start"], DEFAULT_POSITIONS["vp2_b_end"], "#5ca8ff")
+            self._create_segment("vp3_a", DEFAULT_POSITIONS["vp3_a_start"], DEFAULT_POSITIONS["vp3_a_end"], "#5cff5c")
+            self._create_segment("vp3_b", DEFAULT_POSITIONS["vp3_b_start"], DEFAULT_POSITIONS["vp3_b_end"], "#5cff5c")
+            self._labels["vp3_a"].setVisible(False)
+            self._labels["vp3_b"].setVisible(False)
+            for name in ("vp3_a_start", "vp3_a_end", "vp3_b_start", "vp3_b_end"):
+                self._handles[name].setVisible(False)
+            for name in ("vp3_a", "vp3_b"):
+                self._lines[name].setVisible(False)
+
             self._handles["origin"] = self._create_handle(DEFAULT_POSITIONS["origin"], "#ffd45c")
+            self._handles["principal_point"] = self._create_handle(
+                DEFAULT_POSITIONS["principal_point"], "#ffffff"
+            )
+            self._handles["principal_point"].setToolTip("Principal Point (Optical Center)")
+            self._create_principal_point_crosshair()
+            
             self._create_segment(
                 "reference",
                 DEFAULT_POSITIONS["reference_start"],
@@ -235,29 +255,58 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._origin_label.setFont(font)
         self._scene.addItem(self._origin_label)
         
+        # Add Principal Point label
+        self._pp_label = QtWidgets.QGraphicsSimpleTextItem("Principal Point")
+        self._pp_label.setBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
+        self._pp_label.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+        self._pp_label.setZValue(4.0)
+        self._pp_label.setFont(font)
+        self._scene.addItem(self._pp_label)
+        
         self._setup_hud()
         self.set_plate(1920, 1080)
         self._update_lines() # Force initial positions
 
+    def _create_principal_point_crosshair(self) -> None:
+        pen = QtGui.QPen(QtGui.QColor("#ffffff"), 1.0)
+        pen.setCosmetic(True)
+        self._pp_lines = []
+        for _ in range(2):
+            line = self._scene.addLine(QtCore.QLineF(), pen)
+            line.setZValue(1.5)
+            line.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
+            self._pp_lines.append(line)
+
     def set_mode(self, mode: str) -> None:
         self._mode = mode
         is_box = (mode == "box")
+        is_3vp = (mode == "3vp")
         
         # Standard VP handles and labels (Origin always visible)
         for name in ("vp1_a_start", "vp1_a_end", "vp1_b_start", "vp1_b_end",
-                     "vp2_a_start", "vp2_a_end", "vp2_b_start", "vp2_b_end"):
+                     "vp2_a_start", "vp2_a_end", "vp2_b_start", "vp2_b_end",
+                     "vp3_a_start", "vp3_a_end", "vp3_b_start", "vp3_b_end"):
             if name in self._handles:
-                self._handles[name].setVisible(not is_box)
+                if name.startswith("vp3"):
+                    self._handles[name].setVisible(is_3vp)
+                else:
+                    self._handles[name].setVisible(not is_box)
         
         if "origin" in self._handles:
             self._handles["origin"].setVisible(True)
 
-        for name in ("vp1_a", "vp1_b", "vp2_a", "vp2_b"):
+        for name in ("vp1_a", "vp1_b", "vp2_a", "vp2_b", "vp3_a", "vp3_b"):
             if name in self._labels:
-                self._labels[name].setVisible(not is_box)
+                if name.startswith("vp3"):
+                    self._labels[name].setVisible(is_3vp)
+                else:
+                    self._labels[name].setVisible(not is_box)
             if name in self._lines:
                 if not name.startswith("box_edge"):
-                    self._lines[name].setVisible(not is_box)
+                    if name.startswith("vp3"):
+                        self._lines[name].setVisible(is_3vp)
+                    else:
+                        self._lines[name].setVisible(not is_box)
                 
         # Box handles
         box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
@@ -293,7 +342,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             self._is_dragging_box = False
             self._box_is_default = False
 
-    def set_axis_labels(self, axis1: str, axis2: str) -> None:
+    def set_axis_labels(self, axis1: str, axis2: str, axis3: str = "+Y") -> None:
         """Update labels to reflect assigned world axes."""
         for name in ("vp1_a", "vp1_b"):
             if name in self._labels:
@@ -301,6 +350,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         for name in ("vp2_a", "vp2_b"):
             if name in self._labels:
                 self._labels[name].setText(f"{axis2.strip('+-')} Axis")
+        for name in ("vp3_a", "vp3_b"):
+            if name in self._labels:
+                self._labels[name].setText(f"{axis3.strip('+-')} Axis")
         self._update_lines()
 
     def set_reference_visible(self, visible: bool) -> None:
@@ -594,6 +646,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
     def origin(self) -> Point2D:
         return self._handles["origin"].relative_position()
 
+    def principal_point(self) -> Point2D:
+        return self._handles["principal_point"].relative_position()
+
     def reference_segment(self) -> Segment2D:
         return self._segment("reference")
 
@@ -693,6 +748,15 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             origin_pos = self._handles["origin"].pos()
             self._origin_label.setPos(origin_pos.x() + 10, origin_pos.y() + 10)
 
+        # Update Principal Point label and crosshair
+        if hasattr(self, "_pp_label") and "principal_point" in self._handles:
+            pp_pos = self._handles["principal_point"].pos()
+            self._pp_label.setPos(pp_pos.x() + 10, pp_pos.y() - 20)
+            
+            size = 20.0
+            self._pp_lines[0].setLine(QtCore.QLineF(pp_pos.x() - size, pp_pos.y(), pp_pos.x() + size, pp_pos.y()))
+            self._pp_lines[1].setLine(QtCore.QLineF(pp_pos.x(), pp_pos.y() - size, pp_pos.x(), pp_pos.y() + size))
+
         self._update_lines()
         self.changed.emit()
 
@@ -773,6 +837,11 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         if getattr(self, "_mode", "lines") == "box":
             return box_axis_segments(self.match_box_corners(), 1)
         return self._segments("vp2_a", "vp2_b")
+
+    def vp3_segments(self) -> tuple[Segment2D, ...]:
+        if getattr(self, "_mode", "lines") == "box":
+            return box_axis_segments(self.match_box_corners(), 2)
+        return self._segments("vp3_a", "vp3_b")
 
     def _update_horizon(self, result: SolveResult | None) -> None:
         if not result or not result.ok:

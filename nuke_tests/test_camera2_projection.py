@@ -137,7 +137,33 @@ def main() -> None:
         )
 
     assert_point_close(nuke_projection_to_ui(camera, Vector3D(0.0, 0.0, 0.0)), ORIGIN)
-    print("camera2-projection-test passed", flush=True)
+    print("centered-projection-test passed", flush=True)
+
+    # Test Case 2: Off-center principal point
+    custom_pp = Point2D(0.65, 0.38)
+    solve_input = SolveInput(
+        image_width=DIMENSIONS.width,
+        image_height=DIMENSIONS.height,
+        vp1_segments=segments_for_vp(solver_to_ui(project_direction(CAMERA_X), DIMENSIONS, custom_pp)),
+        vp2_segments=segments_for_vp(solver_to_ui(project_direction(CAMERA_Y), DIMENSIONS, custom_pp)),
+        principal_point=custom_pp,
+        origin=ORIGIN,
+    )
+    result = solve_2vp(solve_input)
+    assert result.ok
+    
+    camera = create_camera(result, name="SceneSolverOffCenterTest")
+    assert_close(camera["win_translate"].value(0), (0.5 - 0.65) * 2.0)
+    assert_close(camera["win_translate"].value(1), (0.38 - 0.5) * 2.0)
+    
+    # In Nuke, the principal point is where the optical axis projects.
+    # If win_translate is correct, projecting a point at (0, 0, -f) in camera space 
+    # should yield the principal point on the image.
+    # snap3d.projectPoint uses world points.
+    optical_axis_pt_world = result.camera_to_world_matrix.transform_point(Vector3D(0, 0, -FOCAL_PLANE_DISTANCE))
+    assert_point_close(nuke_projection_to_ui(camera, optical_axis_pt_world), custom_pp)
+
+    print("off-center-projection-test passed", flush=True)
     nuke.scriptClear()
 
 

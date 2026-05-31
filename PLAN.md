@@ -52,7 +52,8 @@ nuke_SceneSolver/
   skalowanie translacji kamery oraz akcje eksportu helperów sceny. Walidacja
   interaktywna w Nuke 15.1 objęła idealny cube oraz niesześcienny cuboid z inną
   kamerą.
-- Następny krok: Etap `9` (Principal Point i Optyka).
+- Etap `9`: zakończony. Dodano obsługę Principal Point (interaktywną i 3VP), mapowanie lens shift do `win_translate` oraz tryb 1VP z horyzontem.
+- Następny krok: Etap `10` (Trwałość ustawień i packaging).
 
 ---
 
@@ -80,15 +81,15 @@ Testy:
 - odzyskanie długości odcinka syntetycznego,
 - poprawność transformacji generowanych węzłów Nuke 3D.
 
-## Etap 9 - Principal Point i Optyka
+## Etap 9 - Principal Point i Optyka (ZAKOŃCZONY)
 
 Cel: Rozszerzyć możliwości o precyzyjną konfigurację optyki (lens shift / offset).
 
 Zadania:
-1. Ręczna edycja Principal Point (przesuwanie środka optycznego).
-2. Lens shift przez zmapowanie przesunięcia na knob `win_translate` kamery Nuke.
-3. Wyliczanie Principal Point z trzeciego punktu zbiegu (3VP solver).
-4. Tryb `1VP` (znana ogniskowa i linia horyzontu).
+1. [x] Ręczna edycja Principal Point (przesuwanie środka optycznego).
+2. [x] Lens shift przez zmapowanie przesunięcia na knob `win_translate` kamery Nuke.
+3. [x] Wyliczanie Principal Point z trzeciego punktu zbiegu (3VP solver).
+4. [x] Tryb `1VP` (znana ogniskowa i linia horyzontu).
 
 ## Etap 10 - Trwałość ustawień i packaging
 

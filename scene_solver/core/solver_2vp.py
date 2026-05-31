@@ -55,13 +55,17 @@ class SolveInput:
     image_height: int
     vp1_segments: tuple[Segment2D, ...]
     vp2_segments: tuple[Segment2D, ...]
+    vp3_segments: tuple[Segment2D, ...] = ()
     principal_point: Point2D | None = None
     origin: Point2D = DEFAULT_PRINCIPAL_POINT
     first_axis: str = "+X"
     second_axis: str = "+Y"
+    third_axis: str = "+Z"
     sensor_width_mm: float = DEFAULT_SENSOR_WIDTH_MM
+    known_focal_length_mm: float | None = None
     camera_distance: float = DEFAULT_CAMERA_DISTANCE
     reference_distance: ReferenceDistanceInput | None = None
+    mode: str = "2vp"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,15 +105,30 @@ class SolveResult:
 def solve_2vp(solve_input: SolveInput) -> SolveResult:
     """Recover camera intrinsics, orientation, and arbitrary-scale position."""
 
-    principal_point = solve_input.principal_point or DEFAULT_PRINCIPAL_POINT
     warnings: list[str] = []
+    dimensions = ImageDimensions(solve_input.image_width, solve_input.image_height)
+    principal_point = solve_input.principal_point or DEFAULT_PRINCIPAL_POINT
 
     try:
-        dimensions = ImageDimensions(solve_input.image_width, solve_input.image_height)
         _validate_scalar("Sensor width", solve_input.sensor_width_mm)
         _validate_scalar("Camera distance", solve_input.camera_distance)
         first_axis = _parse_axis(solve_input.first_axis)
         second_axis = _parse_axis(solve_input.second_axis)
+
+        if solve_input.mode == "1vp":
+            return _solve_1vp(solve_input, dimensions)
+
+        if solve_input.principal_point is None:
+            if solve_input.vp3_segments:
+                principal_point = _solve_principal_point_3vp(
+                    solve_input.vp1_segments,
+                    solve_input.vp2_segments,
+                    solve_input.vp3_segments,
+                    dimensions,
+                )
+            else:
+                principal_point = DEFAULT_PRINCIPAL_POINT
+
         if first_axis[0] == second_axis[0]:
             raise GeometryError("The two vanishing points must map to different world axes.")
 
@@ -232,6 +251,186 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
         )
     except (GeometryError, ValueError) as error:
         return _error_result(principal_point, solve_input.origin, str(error), warnings)
+
+
+def _solve_1vp(solve_input: SolveInput, dimensions: ImageDimensions) -> SolveResult:
+    """Calibrate from one vanishing point and a known focal length + horizon."""
+
+    principal_point = solve_input.principal_point or DEFAULT_PRINCIPAL_POINT
+    warnings: list[str] = []
+
+    if solve_input.known_focal_length_mm is None:
+        raise GeometryError("Focal length must be provided for 1VP mode.")
+    
+    focal_plane_distance = solve_input.known_focal_length_mm / solve_input.sensor_width_mm
+    relative_focal_length = 2.0 * focal_plane_distance
+    
+    first_vp_solver = _intersect_ui_segments(solve_input.vp1_segments, dimensions, principal_point)
+    first_camera_direction = solver_point_to_camera_ray(first_vp_solver, focal_plane_distance)
+    first_axis = _parse_axis(solve_input.first_axis)
+    
+    # Use VP2 segments to fit a horizon line
+    if not solve_input.vp2_segments:
+        raise GeometryError("Horizon line segments (VP2) must be provided for 1VP mode.")
+    
+    # Fit a line ax + by + c = 0 to all points in vp2_segments
+    points = []
+    for seg in solve_input.vp2_segments:
+        points.append(ui_to_solver(seg.start, dimensions, principal_point))
+        points.append(ui_to_solver(seg.end, dimensions, principal_point))
+    
+    # Least squares line fit for the horizon
+    # Normal to ground plane in camera space: (a, b, c / focal_plane_distance)
+    # For now, assume horizon is roughly horizontal and use a simpler approach:
+    # the cross product of rays to two horizon points gives the normal.
+    if len(points) < 2:
+        raise GeometryError("Need at least two points for the horizon line.")
+    
+    r_h1 = solver_point_to_camera_ray(points[0], focal_plane_distance)
+    r_h2 = solver_point_to_camera_ray(points[1], focal_plane_distance)
+    world_up_camera = r_h1.cross(r_h2).normalized()
+    
+    # We have first_camera_direction (axis A) and world_up_camera (Y axis in world if ground axes are used)
+    # Let's construct the rotation matrix.
+    # Note: If ground axes are +X, +Z, then world-up is +Y.
+    # We need to find which world axis corresponds to the horizon normal.
+    # Usually world +Y is up.
+    
+    # Constructing columns of R (camera-to-world rotation)
+    # R = [X_c, Y_c, Z_c] where X_c is camera X in world coordinates?
+    # No, our _camera_to_world_rotation takes columns as world axes in camera coordinates.
+    
+    # We have axis_A_camera = first_camera_direction
+    # We have world_up_camera = world_up_camera
+    
+    # For now, let's assume world-up is always +Y.
+    world_up_axis = (1, 1.0) # +Y
+    
+    # Target: columns[0] = world X in camera, columns[1] = world Y, columns[2] = world Z
+    
+    primary_axis_idx = first_axis[0]
+    primary_axis_dir = first_camera_direction * first_axis[1]
+    
+    columns = [Vector3D(0, 0, 0) for _ in range(3)]
+    columns[primary_axis_idx] = primary_axis_dir
+    
+    if primary_axis_idx == 1:
+        # Primary axis is Y. Horizon gives XZ plane orientation.
+        # Use the first point of horizon to define a temporary X-ish axis.
+        # Points on horizon are in XZ plane, so they are perpendicular to Y.
+        r_h1 = solver_point_to_camera_ray(points[0], focal_plane_distance)
+        columns[0] = r_h1.normalized()
+        columns[2] = columns[0].cross(columns[1]).normalized()
+    else:
+        columns[1] = world_up_camera
+        # Orthogonalize Y to primary axis if needed
+        dot = columns[1].dot(columns[primary_axis_idx])
+        columns[1] = (columns[1] - columns[primary_axis_idx] * dot).normalized()
+        
+        # Recover the third axis using cross product
+        # X cross Y = Z, Y cross Z = X, Z cross X = Y
+        if primary_axis_idx == 0: # X, Y -> Z
+            columns[2] = columns[0].cross(columns[1])
+        else: # Z, Y -> X (since Y cross Z = X, then Z cross Y = -X, but we want X)
+            columns[0] = columns[1].cross(columns[2])
+
+    camera_to_world_rotation = _camera_to_world_rotation(tuple(columns)) # type: ignore
+    
+    # Rest of the logic (origin, position, result)
+    origin_solver = ui_to_solver(solve_input.origin, dimensions, principal_point)
+    origin_camera_ray = solver_point_to_camera_ray(origin_solver, focal_plane_distance)
+    origin_world_ray = camera_to_world_rotation.transform_direction(origin_camera_ray)
+    camera_position = origin_world_ray * -solve_input.camera_distance
+    
+    reference_distance: ReferenceDistanceCalibration | None = None
+    if solve_input.reference_distance is not None:
+        reference_distance = calibrate_reference_distance(
+            solve_input.reference_distance,
+            dimensions=dimensions,
+            principal_point=principal_point,
+            focal_plane_distance=focal_plane_distance,
+            camera_to_world_rotation=camera_to_world_rotation,
+            camera_position=camera_position,
+        )
+        camera_position = camera_position * reference_distance.scale_factor
+        warnings.extend(reference_distance.warnings)
+
+    camera_to_world_matrix = _with_translation(camera_to_world_rotation, camera_position)
+    world_to_camera_matrix = camera_to_world_matrix.inverse()
+    
+    sensor_height_mm = solve_input.sensor_width_mm * dimensions.height_relative_to_width
+    focal_length_mm = focal_plane_distance * solve_input.sensor_width_mm
+
+    k_matrix = Matrix4.from_rows((
+        (-focal_plane_distance, 0.0, 0.0, 0.0),
+        (0.0, -focal_plane_distance, 0.0, 0.0),
+        (0.0, 0.0, 1.0, 0.0),
+        (0.0, 0.0, 1.0, 0.0)
+    ))
+    projection_matrix = k_matrix @ world_to_camera_matrix
+
+    return SolveResult(
+        camera_to_world_matrix=camera_to_world_matrix,
+        world_to_camera_matrix=world_to_camera_matrix,
+        projection_matrix=projection_matrix,
+        camera_position=camera_position,
+        relative_focal_length=relative_focal_length,
+        focal_length_mm=focal_length_mm,
+        horizontal_fov_radians=2.0 * atan(0.5 * solve_input.sensor_width_mm / focal_length_mm),
+        vertical_fov_radians=2.0 * atan(0.5 * sensor_height_mm / focal_length_mm),
+        image_dimensions=dimensions,
+        sensor_width_mm=solve_input.sensor_width_mm,
+        sensor_height_mm=sensor_height_mm,
+        principal_point_ui=principal_point,
+        origin_ui=solve_input.origin,
+        vanishing_points_ui=(
+            solver_to_ui(first_vp_solver, dimensions, principal_point),
+            None,
+            None,
+        ),
+        vanishing_points_solver=(first_vp_solver, None, None),
+        reference_distance=reference_distance,
+        warnings=tuple(warnings),
+        errors=(),
+    )
+
+
+def _solve_principal_point_3vp(
+    vp1_segments: tuple[Segment2D, ...],
+    vp2_segments: tuple[Segment2D, ...],
+    vp3_segments: tuple[Segment2D, ...],
+    dimensions: ImageDimensions,
+) -> Point2D:
+    # Use image center as temporary principal point to find VPs in a stable solver space
+    center = DEFAULT_PRINCIPAL_POINT
+    v1 = _intersect_ui_segments(vp1_segments, dimensions, center)
+    v2 = _intersect_ui_segments(vp2_segments, dimensions, center)
+    v3 = _intersect_ui_segments(vp3_segments, dimensions, center)
+
+    # Orthocenter O(x,y) equations:
+    # (x - x1)(x2 - x3) + (y - y1)(y2 - y3) = 0
+    # (x - x2)(x1 - x3) + (y - y2)(y1 - y3) = 0
+    # 
+    # Rearranging into Ax = B:
+    # x(x2 - x3) + y(y2 - y3) = x1(x2 - x3) + y1(y2 - y3)
+    # x(x1 - x3) + y(y1 - y3) = x2(x1 - x3) + y2(y1 - y3)
+    
+    a1, b1 = v2.x - v3.x, v2.y - v3.y
+    c1 = v1.x * a1 + v1.y * b1
+    
+    a2, b2 = v1.x - v3.x, v1.y - v3.y
+    c2 = v2.x * a2 + v2.y * b2
+    
+    det = a1 * b2 - a2 * b1
+    if abs(det) < 1e-9:
+        raise GeometryError("Could not calculate Principal Point from 3VP (vanishing points are collinear).")
+    
+    ox = (c1 * b2 - c2 * b1) / det
+    oy = (a1 * c2 - a2 * c1) / det
+    
+    # O is in solver coordinates relative to image center.
+    # Convert O back to UI coordinates.
+    return solver_to_ui(Point2D(ox, oy), dimensions, center)
 
 
 def _validate_scalar(name: str, value: float) -> None:
