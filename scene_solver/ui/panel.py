@@ -30,7 +30,9 @@ from scene_solver.nuke_integration import (
     create_scene_grid,
     get_selected_camera,
     get_selected_read,
+    load_state,
     render_plate_preview,
+    save_state,
     update_camera,
 )
 from scene_solver.ui.canvas import SceneSolverCanvas
@@ -49,8 +51,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._plate: PlateInfo | None = None
         self._last_result: SolveResult | None = None
         self._last_box_dimension: BoxDimensionCalibration | None = None
+        self._is_loading_state = False
         self._build_ui()
         self._connect_signals()
+        self._load_state_from_nuke()
         self._refresh_solution()
 
     def _build_ui(self) -> None:
@@ -69,13 +73,24 @@ class SceneSolverPanel(QtWidgets.QWidget):
 
         self._options_layout = QtWidgets.QFormLayout()
         options = self._options_layout
-        self._mode_combo = QtWidgets.QComboBox()
-        self._mode_combo.addItems(["2VP", "Box", "3VP", "1VP"])
+        self._match_type_combo = QtWidgets.QComboBox()
+        self._match_type_combo.addItems(["Box Match", "Vanishing Points"])
+        self._match_type_combo.setCurrentText("Vanishing Points")
+        
+        self._vp1_enable = QtWidgets.QCheckBox("First VP axis")
+        self._vp1_enable.setChecked(True)
+        self._vp1_enable.setEnabled(False) # Always at least 1 VP
         self._first_axis = QtWidgets.QComboBox()
         self._first_axis.addItems(AXES)
+        
+        self._vp2_enable = QtWidgets.QCheckBox("Second VP axis")
+        self._vp2_enable.setChecked(True)
         self._second_axis = QtWidgets.QComboBox()
         self._second_axis.addItems(AXES)
         self._second_axis.setCurrentText("+Z")
+        
+        self._vp3_enable = QtWidgets.QCheckBox("Third VP axis")
+        self._vp3_enable.setChecked(False)
         self._third_axis = QtWidgets.QComboBox()
         self._third_axis.addItems(AXES)
         self._third_axis.setCurrentText("+Y")
@@ -126,10 +141,22 @@ class SceneSolverPanel(QtWidgets.QWidget):
             "Coordinate of the match-box base plane along the derived third axis. "
             "For the default +X/+Z ground axes this is the base Y coordinate."
         )
-        options.addRow("Matching Mode", self._mode_combo)
-        options.addRow("First VP axis", self._first_axis)
-        options.addRow("Second VP axis", self._second_axis)
-        options.addRow("Third VP axis", self._third_axis)
+        
+        self._vp_axes_row = QtWidgets.QWidget()
+        vp_axes_layout = QtWidgets.QHBoxLayout(self._vp_axes_row)
+        vp_axes_layout.setContentsMargins(0, 0, 0, 0)
+        vp_axes_layout.addWidget(self._vp1_enable)
+        vp_axes_layout.addWidget(self._first_axis)
+        vp_axes_layout.addSpacing(10)
+        vp_axes_layout.addWidget(self._vp2_enable)
+        vp_axes_layout.addWidget(self._second_axis)
+        vp_axes_layout.addSpacing(10)
+        vp_axes_layout.addWidget(self._vp3_enable)
+        vp_axes_layout.addWidget(self._third_axis)
+        vp_axes_layout.addStretch(1)
+
+        options.addRow("Matching Mode", self._match_type_combo)
+        options.addRow("VP Axes", self._vp_axes_row)
         options.addRow("", self._auto_pp)
         options.addRow("", self._use_pp_offset)
 
@@ -202,7 +229,9 @@ class SceneSolverPanel(QtWidgets.QWidget):
 
     def _connect_signals(self) -> None:
         self._use_read_button.clicked.connect(self._use_selected_read)
-        self._mode_combo.currentTextChanged.connect(self._on_mode_changed)
+        self._match_type_combo.currentTextChanged.connect(self._on_mode_changed)
+        self._vp2_enable.toggled.connect(self._on_vp_check_toggled)
+        self._vp3_enable.toggled.connect(self._on_vp_check_toggled)
         self._canvas.changed.connect(self._refresh_solution)
         self._first_axis.currentTextChanged.connect(self._refresh_solution)
         self._second_axis.currentTextChanged.connect(self._refresh_solution)
@@ -225,22 +254,45 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._on_pp_offset_toggled() # Sync initial state
         self._update_scale_controls()
 
-    def _on_mode_changed(self, mode_str: str) -> None:
-        mode = mode_str.lower()
+    def _on_vp_check_toggled(self) -> None:
+        sender = self.sender()
+        if sender == self._vp2_enable:
+            if not self._vp2_enable.isChecked():
+                self._vp3_enable.setChecked(False)
+        elif sender == self._vp3_enable:
+            if self._vp3_enable.isChecked():
+                self._vp2_enable.setChecked(True)
+        self._on_mode_changed()
+
+    def _get_current_mode(self) -> str:
+        if self._match_type_combo.currentText() == "Box Match":
+            return "box"
+        if self._vp3_enable.isChecked():
+            return "3vp"
+        if self._vp2_enable.isChecked():
+            return "2vp"
+        return "1vp"
+
+    def _on_mode_changed(self, *args) -> None:
+        mode = self._get_current_mode()
         self._canvas.set_mode(mode)
         
         if mode != "box" and self._uses_box_dimension():
             self._scale_mode.setCurrentText(ARBITRARY_SCALE_MODE)
         
         # Visibility logic
+        is_vp = self._match_type_combo.currentText() == "Vanishing Points"
         is_1vp = (mode == "1vp")
         is_3vp = (mode == "3vp")
         is_box = (mode == "box")
         
         # Axis selectors
-        self._set_row_visible(self._first_axis, True)
-        self._set_row_visible(self._second_axis, not is_1vp)
-        self._set_row_visible(self._third_axis, is_3vp)
+        self._set_row_visible(self._vp_axes_row, is_vp)
+        self._vp1_enable.setEnabled(False) # Always checked and disabled in VP mode
+        self._vp2_enable.setEnabled(is_vp)
+        self._second_axis.setEnabled(not is_1vp)
+        self._vp3_enable.setEnabled(is_vp)
+        self._third_axis.setEnabled(is_3vp)
         
         # PP controls
         self._set_row_visible(self._auto_pp, is_3vp)
@@ -265,17 +317,17 @@ class SceneSolverPanel(QtWidgets.QWidget):
             label.setVisible(visible)
 
     def _on_pp_offset_toggled(self) -> None:
-        mode = self._mode_combo.currentText()
+        mode = self._get_current_mode()
         show_pp = self._use_pp_offset.isChecked()
         # 3VP with Auto PP always enables visibility of the PP crosshair
-        if mode == "3VP" and self._auto_pp.isChecked():
+        if mode == "3vp" and self._auto_pp.isChecked():
             show_pp = True
         self._canvas.set_principal_point_visible(show_pp)
         self._refresh_solution()
 
     def _on_scale_mode_changed(self, *args) -> None:
         if self._uses_box_dimension() and self._canvas.mode() != "box":
-            self._mode_combo.setCurrentText("Box")
+            self._match_type_combo.setCurrentText("Box Match")
         self._update_scale_controls()
         self._refresh_solution()
 
@@ -284,7 +336,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
 
     def _update_scale_controls(self) -> None:
         uses_box_dimension = self._uses_box_dimension()
-        mode = self._mode_combo.currentText().lower()
+        mode = self._get_current_mode()
         
         # Distance only enabled in arbitrary mode
         self._set_row_visible(self._camera_dist_row, not uses_box_dimension)
@@ -341,7 +393,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._canvas.set_axis_labels(axis1, axis2, axis3)
         self._last_box_dimension = None
 
-        mode_str = self._mode_combo.currentText().lower()
+        mode_str = self._get_current_mode()
         
         # Determine Principal Point input
         principal_point: Point2D | None
@@ -429,7 +481,108 @@ class SceneSolverPanel(QtWidgets.QWidget):
         # Draw perspective grid on canvas
         self._canvas.update_grid(self._last_result, axis1, axis2)
         
+        self._save_state_to_nuke()
         return self._last_result
+
+    def _load_state_from_nuke(self) -> None:
+        state = load_state()
+        if not state:
+            return
+        
+        self._is_loading_state = True
+        try:
+            # Restore UI controls
+            if "match_type" in state:
+                self._match_type_combo.setCurrentText(state["match_type"])
+            if "vp2_enable" in state:
+                self._vp2_enable.setChecked(state["vp2_enable"])
+            if "vp3_enable" in state:
+                self._vp3_enable.setChecked(state["vp3_enable"])
+                
+            # Legacy state migration
+            if "vp_count" in state and "vp2_enable" not in state:
+                vp_count = state["vp_count"]
+                if vp_count == "1 VP":
+                    self._vp2_enable.setChecked(False)
+                    self._vp3_enable.setChecked(False)
+                elif vp_count == "2 VPs":
+                    self._vp2_enable.setChecked(True)
+                    self._vp3_enable.setChecked(False)
+                elif vp_count == "3 VPs":
+                    self._vp2_enable.setChecked(True)
+                    self._vp3_enable.setChecked(True)
+
+            if "mode" in state and "match_type" not in state:
+                old_mode = state["mode"].lower()
+                if old_mode == "box":
+                    self._match_type_combo.setCurrentText("Box Match")
+                elif old_mode == "1vp":
+                    self._match_type_combo.setCurrentText("Vanishing Points")
+                    self._vp2_enable.setChecked(False)
+                    self._vp3_enable.setChecked(False)
+                elif old_mode == "2vp":
+                    self._match_type_combo.setCurrentText("Vanishing Points")
+                    self._vp2_enable.setChecked(True)
+                    self._vp3_enable.setChecked(False)
+                elif old_mode == "3vp":
+                    self._match_type_combo.setCurrentText("Vanishing Points")
+                    self._vp2_enable.setChecked(True)
+                    self._vp3_enable.setChecked(True)
+
+            if "first_axis" in state:
+                self._first_axis.setCurrentText(state["first_axis"])
+            if "second_axis" in state:
+                self._second_axis.setCurrentText(state["second_axis"])
+            if "third_axis" in state:
+                self._third_axis.setCurrentText(state["third_axis"])
+            if "auto_pp" in state:
+                self._auto_pp.setChecked(state["auto_pp"])
+            if "use_pp_offset" in state:
+                self._use_pp_offset.setChecked(state["use_pp_offset"])
+            if "sensor_width" in state:
+                self._sensor_width.setValue(state["sensor_width"])
+            if "focal_length" in state:
+                self._focal_length.setValue(state["focal_length"])
+            if "scale_mode" in state:
+                self._scale_mode.setCurrentText(state["scale_mode"])
+            if "camera_distance" in state:
+                self._camera_distance.setValue(state["camera_distance"])
+            if "box_dimension_axis" in state:
+                self._box_dimension_axis.setCurrentText(state["box_dimension_axis"])
+            if "box_dimension_length" in state:
+                self._box_dimension_length.setValue(state["box_dimension_length"])
+            if "match_box_base_offset" in state:
+                self._match_box_base_offset.setValue(state["match_box_base_offset"])
+            
+            # Restore Canvas state
+            if "canvas" in state:
+                self._canvas.set_state(state["canvas"])
+        finally:
+            self._is_loading_state = False
+
+    def _save_state_to_nuke(self) -> None:
+        if self._is_loading_state:
+            return
+            
+        state = {
+            "match_type": self._match_type_combo.currentText(),
+            "vp2_enable": self._vp2_enable.isChecked(),
+            "vp3_enable": self._vp3_enable.isChecked(),
+            "first_axis": self._first_axis.currentText(),
+            "second_axis": self._second_axis.currentText(),
+            "third_axis": self._third_axis.currentText(),
+            "auto_pp": self._auto_pp.isChecked(),
+            "use_pp_offset": self._use_pp_offset.isChecked(),
+            "sensor_width": self._sensor_width.value(),
+            "focal_length": self._focal_length.value(),
+            "scale_mode": self._scale_mode.currentText(),
+            "camera_distance": self._camera_distance.value(),
+            "box_dimension_axis": self._box_dimension_axis.currentText(),
+            "box_dimension_length": self._box_dimension_length.value(),
+            "match_box_base_offset": self._match_box_base_offset.value(),
+            "canvas": self._canvas.get_state(),
+        }
+        save_state(state)
 
     def _create_camera(self) -> None:
         try:

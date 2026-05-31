@@ -21,6 +21,7 @@ from scene_solver.nuke_integration.scene_helpers import (
     create_origin_card,
     create_scene_grid,
 )
+from scene_solver.nuke_integration.state import load_state, save_state
 
 __all__ = [
     "CameraAdapterError",
@@ -36,6 +37,8 @@ __all__ = [
     "create_scene_grid",
     "get_selected_camera",
     "get_selected_read",
+    "load_state",
     "render_plate_preview",
+    "save_state",
     "update_camera",
 ]

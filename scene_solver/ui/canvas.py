@@ -844,6 +844,35 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             self._handles[f"{name}_end"].relative_position(),
         )
 
+    def get_state(self) -> dict[str, dict[str, float]]:
+        """Return a dictionary of all handle relative positions."""
+        return {
+            name: {"x": handle.relative_position().x, "y": handle.relative_position().y}
+            for name, handle in self._handles.items()
+        }
+
+    def set_state(self, state: dict[str, dict[str, float]]) -> None:
+        """Restore handle positions from a dictionary."""
+        self._is_internal_update = True
+        try:
+            for name, pos_dict in state.items():
+                if name in self._handles:
+                    self._handles[name].set_relative_position(
+                        Point2D(pos_dict["x"], pos_dict["y"])
+                    )
+            # Make sure to update the box layout state
+            if self._mode == "box":
+                self._box_is_default = False
+                box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
+                              "box_v001", "box_v101", "box_v011", "box_v111")
+                for name in box_vnames:
+                    if name in self._handles:
+                        self._last_box_positions[name] = self._handles[name].relative_position()
+        finally:
+            self._is_internal_update = False
+        self._update_lines()
+        self.changed.emit()
+
     def vp1_segments(self) -> tuple[Segment2D, ...]:
         if getattr(self, "_mode", "lines") == "box":
             return box_axis_segments(self.match_box_corners(), 0)

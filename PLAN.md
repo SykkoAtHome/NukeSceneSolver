@@ -53,7 +53,8 @@ nuke_SceneSolver/
   interaktywna w Nuke 15.1 objęła idealny cube oraz niesześcienny cuboid z inną
   kamerą.
 - Etap `9`: zakończony. Dodano obsługę Principal Point (interaktywną i 3VP), mapowanie lens shift do `win_translate` oraz tryb 1VP z horyzontem.
-- Następny krok: Etap `10` (Trwałość ustawień i packaging).
+- Etap `10`: zakończony. Dodano trwałość ustawień przez ukryty knob na `nuke.root()` oraz zaktualizowano instrukcje instalacji.
+- Produkt v1 jest gotowy do wdrożenia.
 
 ---
 
@@ -96,9 +97,9 @@ Zadania:
 Cel: Przygotować narzędzie do codziennej pracy.
 
 Zadania:
-- zapisywać stan linii VP, Boxa i punktów w skrypcie Nuke (serializacja do knobs),
-- automatyczne odtwarzanie stanu po ponownym otwarciu panelu,
-- przygotowanie finalnej instrukcji instalacji i przykładowych skryptów.
+- [x] zapisywać stan linii VP, Boxa i punktów w skrypcie Nuke (serializacja do knobs),
+- [x] automatyczne odtwarzanie stanu po ponownym otwarciu panelu,
+- [x] przygotowanie finalnej instrukcji instalacji i przykładowych skryptów.
 
 ---
 

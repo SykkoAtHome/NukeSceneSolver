@@ -18,7 +18,7 @@ Nuke 15.1v4 ships with Python 3.10.10 and PySide2. The core package deliberately
 does not import either `nuke` or Qt, so it can be tested with a regular Python
 interpreter.
 
-## Development
+## Installation and Development
 
 Run the unit tests from the repository root:
 
@@ -26,8 +26,10 @@ Run the unit tests from the repository root:
 python -m pytest
 ```
 
-For development inside Nuke, add the repository plugin path once in
-`C:\Users\<user>\.nuke\init.py`:
+### Installing in Nuke
+
+For daily use or development inside Nuke, add the repository plugin path to your
+`~/.nuke/init.py` (or `C:\Users\<user>\.nuke\init.py` on Windows):
 
 ```python
 import nuke
@@ -38,6 +40,12 @@ Nuke then loads this repository's `init.py` and `menu.py` through its normal
 plugin discovery. No Scene Solver import is required in the user's `.nuke/menu.py`.
 After restarting Nuke normally, open `Scene Solver > Open Scene Solver` from the
 Nodes toolbar on the left side.
+
+Your panel settings, viewport lines, and matching points are automatically saved 
+within the Nuke script (`.nk` file) and will be restored next time you open the panel.
+
+You can find example Nuke scripts and plate images for testing in the `nuke_files/` directory.
+
 Select one `Read` node and click `Use Selected Read`. Common Qt-supported image
 formats display directly in the panel. For formats such as EXR, the panel asks
 Nuke to render a small temporary PNG proxy of the current frame. The proxy
