@@ -129,6 +129,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         
         # State
         self._grid_visible = True
+        self._horizon_visible = True
         self._mode = "lines"
         self._undo_buffer: dict[str, Point2D] | None = None
         self._is_internal_update = False
@@ -140,6 +141,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._fit_btn = None
         self._100_btn = None
         self._grid_btn = None
+        self._horizon_btn = None
         self._reset_btn = None
         self._hud_style = ""
         
