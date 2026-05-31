@@ -48,17 +48,6 @@ class LensSolverPanel(QtWidgets.QWidget):
 
         self._canvas = LensSolverCanvas()
         layout.addWidget(self._canvas, 1)
-        
-        # View controls
-        view_controls = QtWidgets.QHBoxLayout()
-        self._fit_button = QtWidgets.QPushButton("Fit")
-        self._fit_button.setToolTip("Fit plate in view")
-        self._100_button = QtWidgets.QPushButton("1:1")
-        self._100_button.setToolTip("Reset zoom to 1:1")
-        view_controls.addWidget(self._fit_button)
-        view_controls.addWidget(self._100_button)
-        view_controls.addStretch(1)
-        layout.addLayout(view_controls)
 
         options = QtWidgets.QFormLayout()
         self._first_axis = QtWidgets.QComboBox()
@@ -96,8 +85,6 @@ class LensSolverPanel(QtWidgets.QWidget):
     def _connect_signals(self) -> None:
         self._use_read_button.clicked.connect(self._use_selected_read)
         self._canvas.changed.connect(self._refresh_solution)
-        self._fit_button.clicked.connect(self._canvas.fit_view)
-        self._100_button.clicked.connect(self._canvas.reset_zoom)
         self._first_axis.currentTextChanged.connect(self._refresh_solution)
         self._second_axis.currentTextChanged.connect(self._refresh_solution)
         self._sensor_width.valueChanged.connect(self._refresh_solution)

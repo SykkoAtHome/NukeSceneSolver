@@ -119,7 +119,44 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._create_segment("vp2_a", Point2D(0.30, 0.40), Point2D(0.25, 0.14), "#5ca8ff")
         self._create_segment("vp2_b", Point2D(0.80, 0.80), Point2D(0.61, 0.21), "#5ca8ff")
         self._handles["origin"] = self._create_handle(Point2D(0.5, 0.5), "#ffd45c")
+        
+        self._setup_hud()
         self.set_plate(1920, 1080)
+
+    def _setup_hud(self) -> None:
+        """Create floating HUD buttons."""
+        hud_layout = QtWidgets.QHBoxLayout(self)
+        hud_layout.setContentsMargins(10, 10, 10, 10)
+        hud_layout.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignRight)
+        
+        style = """
+            QPushButton {
+                background-color: rgba(45, 45, 45, 180);
+                color: #eeeeee;
+                border: 1px solid #555555;
+                border-radius: 4px;
+                padding: 4px 8px;
+                min-width: 40px;
+            }
+            QPushButton:hover {
+                background-color: rgba(70, 70, 70, 220);
+                border: 1px solid #888888;
+            }
+            QPushButton:pressed {
+                background-color: rgba(30, 30, 30, 255);
+            }
+        """
+        
+        self._fit_btn = QtWidgets.QPushButton("Fit")
+        self._fit_btn.setStyleSheet(style)
+        self._fit_btn.clicked.connect(self.fit_view)
+        
+        self._100_btn = QtWidgets.QPushButton("1:1")
+        self._100_btn.setStyleSheet(style)
+        self._100_btn.clicked.connect(self.reset_zoom)
+        
+        hud_layout.addWidget(self._fit_btn)
+        hud_layout.addWidget(self._100_btn)
 
     def fit_view(self) -> None:
         """Fit the entire plate into the current view."""
