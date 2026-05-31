@@ -11,6 +11,18 @@ from lens_solver.core.models import Point2D, Segment2D
 
 HANDLE_RADIUS = 8.0
 
+DEFAULT_POSITIONS = {
+    "vp1_a_start": Point2D(0.12, 0.23),
+    "vp1_a_end": Point2D(0.77, 0.34),
+    "vp1_b_start": Point2D(0.20, 0.70),
+    "vp1_b_end": Point2D(0.95, 0.59),
+    "vp2_a_start": Point2D(0.30, 0.40),
+    "vp2_a_end": Point2D(0.25, 0.14),
+    "vp2_b_start": Point2D(0.80, 0.80),
+    "vp2_b_end": Point2D(0.61, 0.21),
+    "origin": Point2D(0.5, 0.5),
+}
+
 
 class _HandleSignals(QtCore.QObject):
     moved = QtCore.Signal()
@@ -116,6 +128,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._lines: dict[str, QtWidgets.QGraphicsLineItem] = {}
         self._labels: dict[str, QtWidgets.QGraphicsSimpleTextItem] = {}
         self._grid_lines: list[QtWidgets.QGraphicsLineItem] = []
+        self._grid_visible = True
         
         self._create_segment("vp1_a", Point2D(0.12, 0.23), Point2D(0.77, 0.34), "#ff5c5c")
         self._create_segment("vp1_b", Point2D(0.20, 0.70), Point2D(0.95, 0.59), "#ff5c5c")
@@ -139,11 +152,12 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         # Clear existing grid
         while self._grid_lines:
             self._scene.removeItem(self._grid_lines.pop())
-            
-        if not result or not result.ok or not result.projection_matrix:
+
+        if not self._grid_visible or not result or not result.ok or not result.projection_matrix:
             return
 
-        # Simple grid: 10x10 units on the ground plane (Z=0 if Y is up, or Y=0 if Z is up)
+        # Simple grid: 10x10 units on the ground plane
+ (Z=0 if Y is up, or Y=0 if Z is up)
         # We need to know which axis is "up".
         # For simplicity, let's assume world plane formed by axis1 and axis2.
         # But wait, core.solver_2vp produces a full projection matrix.
@@ -239,8 +253,39 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._100_btn.setStyleSheet(style)
         self._100_btn.clicked.connect(self.reset_zoom)
         
+        self._grid_btn = QtWidgets.QPushButton("Grid")
+        self._grid_btn.setCheckable(True)
+        self._grid_btn.setChecked(True)
+        self._grid_btn.setStyleSheet(style + " QPushButton:checked { background-color: rgba(100, 150, 255, 150); }")
+        self._grid_btn.clicked.connect(self.toggle_grid)
+        
+        self._reset_btn = QtWidgets.QPushButton("Reset")
+        self._reset_btn.setStyleSheet(style)
+        self._reset_btn.clicked.connect(self.reset_handles)
+        
         hud_layout.addWidget(self._fit_btn)
         hud_layout.addWidget(self._100_btn)
+        hud_layout.addWidget(self._grid_btn)
+        hud_layout.addWidget(self._reset_btn)
+
+    def toggle_grid(self) -> None:
+        """Toggle perspective grid visibility."""
+        self._grid_visible = not self._grid_visible
+        self._grid_btn.setChecked(self._grid_visible)
+        # We need the last result to redraw, but for now just clear/update
+        # The panel will trigger update_grid on next change, or we can hide existing.
+        for line in self._grid_lines:
+            line.setVisible(self._grid_visible)
+
+    def reset_handles(self) -> None:
+        """Reset all handles to their default relative positions."""
+        for name, pos in DEFAULT_POSITIONS.items():
+            if name == "origin":
+                self._handles["origin"].set_relative_position(pos)
+            else:
+                self._handles[name].set_relative_position(pos)
+        self._update_lines()
+        self.changed.emit()
 
     def fit_view(self) -> None:
         """Fit the entire plate into the current view."""
