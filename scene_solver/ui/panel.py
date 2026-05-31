@@ -67,7 +67,8 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._canvas = SceneSolverCanvas()
         layout.addWidget(self._canvas, 1)
 
-        options = QtWidgets.QFormLayout()
+        self._options_layout = QtWidgets.QFormLayout()
+        options = self._options_layout
         self._mode_combo = QtWidgets.QComboBox()
         self._mode_combo.addItems(["2VP", "Box", "3VP", "1VP"])
         self._first_axis = QtWidgets.QComboBox()
@@ -132,39 +133,49 @@ class SceneSolverPanel(QtWidgets.QWidget):
         options.addRow("", self._auto_pp)
         options.addRow("", self._use_pp_offset)
 
-        sensor_width_row = QtWidgets.QHBoxLayout()
-        sensor_width_row.addWidget(self._sensor_width)
-        sensor_width_row.addWidget(QtWidgets.QLabel("mm"))
-        sensor_width_row.addStretch(1)
-        options.addRow("Sensor width", sensor_width_row)
+        self._sensor_width_row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(self._sensor_width_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(self._sensor_width)
+        row_layout.addWidget(QtWidgets.QLabel("mm"))
+        row_layout.addStretch(1)
+        options.addRow("Sensor width", self._sensor_width_row)
 
-        focal_length_row = QtWidgets.QHBoxLayout()
-        focal_length_row.addWidget(self._focal_length)
-        focal_length_row.addWidget(QtWidgets.QLabel("mm"))
-        focal_length_row.addStretch(1)
-        options.addRow("Focal length", focal_length_row)
+        self._focal_length_row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(self._focal_length_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(self._focal_length)
+        row_layout.addWidget(QtWidgets.QLabel("mm"))
+        row_layout.addStretch(1)
+        options.addRow("Focal length", self._focal_length_row)
 
         options.addRow("Scene scale mode", self._scale_mode)
 
-        camera_dist_row = QtWidgets.QHBoxLayout()
-        camera_dist_row.addWidget(self._camera_distance)
-        camera_dist_row.addWidget(QtWidgets.QLabel("world units"))
-        camera_dist_row.addStretch(1)
-        options.addRow("Camera distance", camera_dist_row)
+        self._camera_dist_row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(self._camera_dist_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(self._camera_distance)
+        row_layout.addWidget(QtWidgets.QLabel("world units"))
+        row_layout.addStretch(1)
+        options.addRow("Camera distance", self._camera_dist_row)
 
         options.addRow("Box dimension axis", self._box_dimension_axis)
 
-        box_dim_row = QtWidgets.QHBoxLayout()
-        box_dim_row.addWidget(self._box_dimension_length)
-        box_dim_row.addWidget(QtWidgets.QLabel("world units"))
-        box_dim_row.addStretch(1)
-        options.addRow("Estimated box dimension", box_dim_row)
+        self._box_dim_row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(self._box_dim_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(self._box_dimension_length)
+        row_layout.addWidget(QtWidgets.QLabel("world units"))
+        row_layout.addStretch(1)
+        options.addRow("Estimated box dimension", self._box_dim_row)
 
-        base_offset_row = QtWidgets.QHBoxLayout()
-        base_offset_row.addWidget(self._match_box_base_offset)
-        base_offset_row.addWidget(QtWidgets.QLabel("world units"))
-        base_offset_row.addStretch(1)
-        options.addRow("Match box base offset", base_offset_row)
+        self._base_offset_row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(self._base_offset_row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.addWidget(self._match_box_base_offset)
+        row_layout.addWidget(QtWidgets.QLabel("world units"))
+        row_layout.addStretch(1)
+        options.addRow("Match box base offset", self._base_offset_row)
 
         layout.addLayout(options)
 
@@ -217,13 +228,37 @@ class SceneSolverPanel(QtWidgets.QWidget):
     def _on_mode_changed(self, mode_str: str) -> None:
         mode = mode_str.lower()
         self._canvas.set_mode(mode)
+        
         if mode != "box" and self._uses_box_dimension():
             self._scale_mode.setCurrentText(ARBITRARY_SCALE_MODE)
-        self._focal_length.setEnabled(mode == "1vp")
-        self._auto_pp.setEnabled(mode == "3vp")
+        
+        # Visibility logic
+        is_1vp = (mode == "1vp")
+        is_3vp = (mode == "3vp")
+        is_box = (mode == "box")
+        
+        # Axis selectors
+        self._set_row_visible(self._first_axis, True)
+        self._set_row_visible(self._second_axis, not is_1vp)
+        self._set_row_visible(self._third_axis, is_3vp)
+        
+        # PP controls
+        self._set_row_visible(self._auto_pp, is_3vp)
+        self._auto_pp.setEnabled(is_3vp)
+        
+        # Focal length
+        self._set_row_visible(self._focal_length_row, is_1vp)
+        self._focal_length.setEnabled(is_1vp)
+        
         self._on_pp_offset_toggled()
         self._update_scale_controls()
         self._refresh_solution()
+
+    def _set_row_visible(self, widget: QtWidgets.QWidget, visible: bool) -> None:
+        widget.setVisible(visible)
+        label = self._options_layout.labelForField(widget)
+        if label:
+            label.setVisible(visible)
 
     def _on_pp_offset_toggled(self) -> None:
         mode = self._mode_combo.currentText()
@@ -245,9 +280,19 @@ class SceneSolverPanel(QtWidgets.QWidget):
 
     def _update_scale_controls(self) -> None:
         uses_box_dimension = self._uses_box_dimension()
+        mode = self._mode_combo.currentText().lower()
+        
+        # Distance only enabled in arbitrary mode
+        self._set_row_visible(self._camera_dist_row, not uses_box_dimension)
         self._camera_distance.setEnabled(not uses_box_dimension)
-        self._box_dimension_axis.setEnabled(uses_box_dimension)
-        self._box_dimension_length.setEnabled(uses_box_dimension)
+        
+        # Box calibration controls only visible in box mode AND box scale mode
+        show_box_scale = uses_box_dimension and mode == "box"
+        self._set_row_visible(self._box_dimension_axis, show_box_scale)
+        self._box_dimension_axis.setEnabled(show_box_scale)
+        self._set_row_visible(self._box_dim_row, show_box_scale)
+        self._box_dimension_length.setEnabled(show_box_scale)
+        
         self._canvas.set_reference_visible(False)
 
     def _use_selected_read(self) -> None:
