@@ -7,7 +7,9 @@ from collections.abc import Iterable
 from PySide2 import QtCore, QtGui, QtWidgets
 
 from lens_solver.core import SolveResult
-from lens_solver.core.models import Point2D, Segment2D
+from lens_solver.core.models import Point2D, Segment2D, Vector3D
+from lens_solver.core.coordinates import ui_to_solver
+from lens_solver.core.projection import solver_point_to_camera_ray
 
 
 HANDLE_RADIUS = 8.0
@@ -22,11 +24,22 @@ DEFAULT_POSITIONS = {
     "vp2_b_start": Point2D(0.80, 0.80),
     "vp2_b_end": Point2D(0.61, 0.21),
     "origin": Point2D(0.5, 0.5),
+    # 8 box vertices: v[x][y][z]
+    "box_v000": Point2D(0.20, 0.80),
+    "box_v100": Point2D(0.40, 0.80),
+    "box_v010": Point2D(0.15, 0.70),
+    "box_v110": Point2D(0.35, 0.70),
+    "box_v001": Point2D(0.20, 0.60),
+    "box_v101": Point2D(0.40, 0.60),
+    "box_v011": Point2D(0.15, 0.50),
+    "box_v111": Point2D(0.35, 0.50),
 }
 
 
 class _HandleSignals(QtCore.QObject):
     moved = QtCore.Signal()
+    pressed = QtCore.Signal()
+    released = QtCore.Signal()
 
 
 class _HandleItem(QtWidgets.QGraphicsEllipseItem):
@@ -62,6 +75,14 @@ class _HandleItem(QtWidgets.QGraphicsEllipseItem):
         self._dot.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
         
         self.set_relative_position(relative_position)
+
+    def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        self.signals.pressed.emit()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:  # noqa: N802
+        self.signals.released.emit()
+        super().mouseReleaseEvent(event)
 
     def set_plate_rect(self, plate_rect: QtCore.QRectF) -> None:
         relative = self.relative_position()
@@ -108,8 +129,12 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         
         # State
         self._grid_visible = True
+        self._mode = "lines"
         self._undo_buffer: dict[str, Point2D] | None = None
         self._is_internal_update = False
+        self._box_is_default = True
+        self._last_box_positions: dict[str, Point2D] = {}
+        self._is_dragging_box = False
         
         # HUD Elements placeholder
         self._fit_btn = None
@@ -142,6 +167,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self._lines: dict[str, QtWidgets.QGraphicsLineItem] = {}
         self._labels: dict[str, QtWidgets.QGraphicsSimpleTextItem] = {}
         self._grid_lines: list[QtWidgets.QGraphicsLineItem] = []
+        self._box_lines: list[QtWidgets.QGraphicsLineItem] = []
 
         # Create handles and lines (temporarily disable updates during creation)
         self._is_internal_update = True
@@ -151,6 +177,37 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             self._create_segment("vp2_a", DEFAULT_POSITIONS["vp2_a_start"], DEFAULT_POSITIONS["vp2_a_end"], "#5ca8ff")
             self._create_segment("vp2_b", DEFAULT_POSITIONS["vp2_b_start"], DEFAULT_POSITIONS["vp2_b_end"], "#5ca8ff")
             self._handles["origin"] = self._create_handle(DEFAULT_POSITIONS["origin"], "#ffd45c")
+            
+            # Create 8 box handles
+            box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
+                          "box_v001", "box_v101", "box_v011", "box_v111")
+            for name in box_vnames:
+                # Color code: origin yellow, X red, Y blue, Z green, mixed white
+                color = "#ffffff"
+                if name == "box_v100": color = "#ff5c5c"
+                if name == "box_v010": color = "#5ca8ff"
+                if name == "box_v001": color = "#5cff5c"
+                if name == "box_v000": color = "#ffd45c"
+                
+                self._handles[name] = self._create_handle(DEFAULT_POSITIONS[name], color)
+                self._handles[name].setVisible(False)
+                self._handles[name].signals.pressed.connect(self._on_box_pressed)
+                self._handles[name].signals.released.connect(self._on_box_released)
+            
+            # Create lines for the 2D user polygon (dashed)
+            box_edges = (
+                ("box_v000", "box_v100"), ("box_v000", "box_v010"), ("box_v100", "box_v110"), ("box_v010", "box_v110"),
+                ("box_v001", "box_v101"), ("box_v001", "box_v011"), ("box_v101", "box_v111"), ("box_v011", "box_v111"),
+                ("box_v000", "box_v001"), ("box_v100", "box_v101"), ("box_v010", "box_v011"), ("box_v110", "box_v111"),
+            )
+            for i, (v1, v2) in enumerate(box_edges):
+                name = f"box_edge_{i}"
+                pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 60), 1.0, QtCore.Qt.DashLine)
+                pen.setCosmetic(True)
+                line = self._scene.addLine(QtCore.QLineF(), pen)
+                line.setZValue(1.5)
+                line.setVisible(False)
+                self._lines[name] = line
         finally:
             self._is_internal_update = False
             
@@ -169,6 +226,60 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self.set_plate(1920, 1080)
         self._update_lines() # Force initial positions
 
+    def set_mode(self, mode: str) -> None:
+        self._mode = mode
+        is_box = (mode == "box")
+        
+        # Standard VP handles and labels (Origin always visible)
+        for name in ("vp1_a_start", "vp1_a_end", "vp1_b_start", "vp1_b_end",
+                     "vp2_a_start", "vp2_a_end", "vp2_b_start", "vp2_b_end"):
+            if name in self._handles:
+                self._handles[name].setVisible(not is_box)
+        
+        if "origin" in self._handles:
+            self._handles["origin"].setVisible(True)
+
+        for name in ("vp1_a", "vp1_b", "vp2_a", "vp2_b"):
+            if name in self._labels:
+                self._labels[name].setVisible(not is_box)
+            if name in self._lines:
+                if not name.startswith("box_edge"):
+                    self._lines[name].setVisible(not is_box)
+                
+        # Box handles
+        box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
+                      "box_v001", "box_v101", "box_v011", "box_v111")
+        for name in box_vnames:
+            if name in self._handles:
+                self._handles[name].setVisible(is_box)
+        
+        if is_box:
+            self._box_is_default = True
+            # Store current positions of ALL handles to detect deltas
+            self._last_box_positions = {
+                vname: self._handles[vname].relative_position() for vname in box_vnames
+            }
+                
+        if hasattr(self, "_origin_label"):
+            self._origin_label.setVisible(True)
+        
+        self._update_lines()
+        self.changed.emit()
+
+    def _on_box_pressed(self) -> None:
+        if self._mode == "box" and self._box_is_default:
+            self._is_dragging_box = True
+            # Update cache before drag starts
+            box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
+                          "box_v001", "box_v101", "box_v011", "box_v111")
+            for name in box_vnames:
+                self._last_box_positions[name] = self._handles[name].relative_position()
+
+    def _on_box_released(self) -> None:
+        if self._is_dragging_box:
+            self._is_dragging_box = False
+            self._box_is_default = False
+
     def set_axis_labels(self, axis1: str, axis2: str) -> None:
         """Update labels to reflect assigned world axes."""
         for name in ("vp1_a", "vp1_b"):
@@ -179,20 +290,45 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
                 self._labels[name].setText(f"{axis2.strip('+-')} Axis")
         self._update_lines()
 
+    def _unproject_length(self, ui_point: Point2D, world_axis: Vector3D, result: SolveResult) -> float:
+        solver_pt = ui_to_solver(ui_point, result.image_dimensions, result.principal_point_ui)
+        focal_plane_dist = result.relative_focal_length / 2.0
+        try:
+            camera_ray = solver_point_to_camera_ray(solver_pt, focal_plane_dist)
+        except ValueError:
+            return 0.0
+        world_ray = result.camera_to_world_matrix.transform_direction(camera_ray).normalized()
+        
+        C = result.camera_position
+        C_cross_R = C.cross(world_ray)
+        D_cross_R = world_axis.cross(world_ray)
+        denom = D_cross_R.dot(D_cross_R)
+        if denom < 1e-9:
+            return 0.0
+        return C_cross_R.dot(D_cross_R) / denom
+
+    def _get_axis_vector(self, axis_str: str) -> Vector3D:
+        name = axis_str.strip("+-")
+        sign = -1.0 if "-" in axis_str else 1.0
+        if name == "X": return Vector3D(sign, 0.0, 0.0)
+        if name == "Y": return Vector3D(0.0, sign, 0.0)
+        return Vector3D(0.0, 0.0, sign)
+
     def update_grid(self, result: SolveResult | None, axis1: str = "+X", axis2: str = "+Y") -> None:
         """Draw a perspective grid on the ground plane if the solve is valid."""
-        # Clear existing grid
+        # Clear existing grid and box lines
         while self._grid_lines:
             self._scene.removeItem(self._grid_lines.pop())
+        while self._box_lines:
+            self._scene.removeItem(self._box_lines.pop())
 
-        if not self._grid_visible or not result or not result.ok or not result.projection_matrix:
+        if not result or not result.ok or not result.projection_matrix:
             return
 
-        pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 80), 1.0)
-        pen.setCosmetic(True)
-        
         proj = result.projection_matrix
         w, h = self._plate_rect.width(), self._plate_rect.height()
+        pp = result.principal_point_ui
+        aspect = result.image_dimensions.height_relative_to_width
 
         def project(xw: float, yw: float, zw: float) -> QtCore.QPointF | None:
             p = (xw, yw, zw, 1.0)
@@ -204,10 +340,21 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             if abs(out[3]) < 1e-6: return None
             nx = out[0] / out[3]
             ny = out[1] / out[3]
+            
+            # Map solver-space nx, ny to UI-space [0, 1]
+            ui_x = nx + pp.x
+            ui_y = pp.y - ny / aspect
+            
             return QtCore.QPointF(
-                self._plate_rect.left() + (nx + 1.0) * 0.5 * w,
-                self._plate_rect.top() + (1.0 - (ny + 1.0) * 0.5) * h
+                self._plate_rect.left() + ui_x * w,
+                self._plate_rect.top() + ui_y * h
             )
+
+        if not self._grid_visible:
+            return
+
+        pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 80), 1.0)
+        pen.setCosmetic(True)
 
         # Map grid coords [u, v] to world [x, y, z] based on selected axes
         try:
@@ -315,6 +462,7 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
                     self._reset_btn.setStyleSheet(
                         self._hud_style + " QPushButton { color: #ffcc66; }"
                     )
+                self._box_is_default = True
             else:
                 for name, pos in self._undo_buffer.items():
                     self._handles[name].set_relative_position(pos)
@@ -403,9 +551,19 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             self._is_internal_update = False
 
     def vp1_segments(self) -> tuple[Segment2D, Segment2D]:
+        if getattr(self, "_mode", "lines") == "box":
+            return (
+                Segment2D(self._handles["box_v000"].relative_position(), self._handles["box_v100"].relative_position()),
+                Segment2D(self._handles["box_v010"].relative_position(), self._handles["box_v110"].relative_position()),
+            )
         return self._segments("vp1_a", "vp1_b")
 
     def vp2_segments(self) -> tuple[Segment2D, Segment2D]:
+        if getattr(self, "_mode", "lines") == "box":
+            return (
+                Segment2D(self._handles["box_v000"].relative_position(), self._handles["box_v010"].relative_position()),
+                Segment2D(self._handles["box_v100"].relative_position(), self._handles["box_v110"].relative_position()),
+            )
         return self._segments("vp2_a", "vp2_b")
 
     def origin(self) -> Point2D:
@@ -449,12 +607,46 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         return handle
 
     def _handle_moved(self) -> None:
-        if not self._is_internal_update and self._undo_buffer is not None:
-            # User moved something after a reset: invalidate undo
-            self._undo_buffer = None
-            if self._reset_btn:
-                self._reset_btn.setText("Reset")
-                self._reset_btn.setStyleSheet(self._hud_style)
+        if not self._is_internal_update:
+            if self._undo_buffer is not None:
+                self._undo_buffer = None
+                if self._reset_btn:
+                    self._reset_btn.setText("Reset")
+                    self._reset_btn.setStyleSheet(self._hud_style)
+
+            # Box interaction logic
+            if self._mode == "box" and hasattr(self, "_last_box_positions"):
+                box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
+                              "box_v001", "box_v101", "box_v011", "box_v111")
+                
+                # Find which handle moved
+                moved_name = None
+                dx, dy = 0.0, 0.0
+                for name in box_vnames:
+                    p = self._handles[name].relative_position()
+                    last_p = self._last_box_positions.get(name)
+                    if not last_p: continue
+                    if abs(p.x - last_p.x) > 1e-7 or abs(p.y - last_p.y) > 1e-7:
+                        moved_name = name
+                        dx = p.x - last_p.x
+                        dy = p.y - last_p.y
+                        break
+                
+                if moved_name:
+                    if self._is_dragging_box and self._box_is_default:
+                        # Translate WHOLE box during the whole drag
+                        self._is_internal_update = True
+                        try:
+                            for name in box_vnames:
+                                if name == moved_name: continue
+                                p = self._handles[name].relative_position()
+                                self._handles[name].set_relative_position(Point2D(p.x + dx, p.y + dy))
+                        finally:
+                            self._is_internal_update = False
+                    
+                    # Update cache for next incremental move
+                    for name in box_vnames:
+                        self._last_box_positions[name] = self._handles[name].relative_position()
 
         # Update Origin label position
         if hasattr(self, "_origin_label") and "origin" in self._handles:
@@ -465,9 +657,38 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
         self.changed.emit()
 
     def _update_lines(self) -> None:
+        is_box = (getattr(self, "_mode", "lines") == "box")
+        
+        # 1. Update Box Edges visibility and positions
+        box_edges = (
+            ("box_v000", "box_v100"), ("box_v000", "box_v010"), ("box_v100", "box_v110"), ("box_v010", "box_v110"),
+            ("box_v001", "box_v101"), ("box_v001", "box_v011"), ("box_v101", "box_v111"), ("box_v011", "box_v111"),
+            ("box_v000", "box_v001"), ("box_v100", "box_v101"), ("box_v010", "box_v011"), ("box_v110", "box_v111"),
+        )
+        for i in range(12):
+            name = f"box_edge_{i}"
+            if name in self._lines:
+                if is_box:
+                    v1, v2 = box_edges[i]
+                    if v1 in self._handles and v2 in self._handles:
+                        self._lines[name].setLine(QtCore.QLineF(self._handles[v1].pos(), self._handles[v2].pos()))
+                        self._lines[name].setVisible(True)
+                else:
+                    self._lines[name].setVisible(False)
+
+        # 2. Update Standard VP Lines visibility and positions
         for name, line in self._lines.items():
+            if name.startswith("box_edge_"):
+                continue
+            
+            # Hide VP lines entirely in box mode
+            if is_box:
+                line.setVisible(False)
+                continue
+
             if f"{name}_start" not in self._handles or f"{name}_end" not in self._handles:
                 continue
+            
             start_handle = self._handles[f"{name}_start"]
             end_handle = self._handles[f"{name}_end"]
             label = self._labels.get(name)
@@ -505,3 +726,19 @@ class LensSolverCanvas(QtWidgets.QGraphicsView):
             self._handles[f"{name}_start"].relative_position(),
             self._handles[f"{name}_end"].relative_position(),
         )
+
+    def vp1_segments(self) -> tuple[Segment2D, Segment2D]:
+        if getattr(self, "_mode", "lines") == "box":
+            return (
+                Segment2D(self._handles["box_v000"].relative_position(), self._handles["box_v100"].relative_position()),
+                Segment2D(self._handles["box_v010"].relative_position(), self._handles["box_v110"].relative_position()),
+            )
+        return self._segments("vp1_a", "vp1_b")
+
+    def vp2_segments(self) -> tuple[Segment2D, Segment2D]:
+        if getattr(self, "_mode", "lines") == "box":
+            return (
+                Segment2D(self._handles["box_v000"].relative_position(), self._handles["box_v010"].relative_position()),
+                Segment2D(self._handles["box_v100"].relative_position(), self._handles["box_v110"].relative_position()),
+            )
+        return self._segments("vp2_a", "vp2_b")

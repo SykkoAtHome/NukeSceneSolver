@@ -50,6 +50,8 @@ class LensSolverPanel(QtWidgets.QWidget):
         layout.addWidget(self._canvas, 1)
 
         options = QtWidgets.QFormLayout()
+        self._mode_combo = QtWidgets.QComboBox()
+        self._mode_combo.addItems(["Lines", "Box"])
         self._first_axis = QtWidgets.QComboBox()
         self._first_axis.addItems(AXES)
         self._second_axis = QtWidgets.QComboBox()
@@ -64,6 +66,7 @@ class LensSolverPanel(QtWidgets.QWidget):
         self._camera_distance.setRange(0.01, 1000000.0)
         self._camera_distance.setDecimals(3)
         self._camera_distance.setValue(10.0)
+        options.addRow("Matching Mode", self._mode_combo)
         options.addRow("First VP axis", self._first_axis)
         options.addRow("Second VP axis", self._second_axis)
         options.addRow("Sensor width", self._sensor_width)
@@ -84,6 +87,7 @@ class LensSolverPanel(QtWidgets.QWidget):
 
     def _connect_signals(self) -> None:
         self._use_read_button.clicked.connect(self._use_selected_read)
+        self._mode_combo.currentTextChanged.connect(self._on_mode_changed)
         self._canvas.changed.connect(self._refresh_solution)
         self._first_axis.currentTextChanged.connect(self._refresh_solution)
         self._second_axis.currentTextChanged.connect(self._refresh_solution)
@@ -91,6 +95,10 @@ class LensSolverPanel(QtWidgets.QWidget):
         self._camera_distance.valueChanged.connect(self._refresh_solution)
         self._create_button.clicked.connect(self._create_camera)
         self._update_button.clicked.connect(self._update_camera)
+
+    def _on_mode_changed(self, mode_str: str) -> None:
+        self._canvas.set_mode(mode_str.lower())
+        self._refresh_solution()
 
     def _use_selected_read(self) -> None:
         try:

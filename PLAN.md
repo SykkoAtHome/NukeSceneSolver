@@ -193,25 +193,17 @@ Zadania:
 - dodać komendę menu,
 - pobrać zaznaczony node `Read`,
 - odczytać format plate'a,
-- wyświetlić plate w aktywnym Viewerze,
-- dodać cztery edytowalne odcinki VP bezpośrednio jako overlay Viewera,
-- dodać uchwyt origin bezpośrednio jako overlay Viewera,
+- wyświetlić podgląd plate'a w panelu (z obsługą EXR przez proxy),
+- dodać cztery edytowalne odcinki VP na kanwie wewnątrz panelu,
+- dodać uchwyt origin na kanwie wewnątrz panelu,
 - dodać wybór osi świata,
 - dodać sensor width i opcjonalnie sensor height,
 - dodać podgląd komunikatów solvera,
 - dodać `Create Camera` i `Update Camera`.
 
-Podział odpowiedzialności UI:
-
-- Viewer służy do ustawiania linii VP oraz origin na obrazie,
-- dockowalny panel zawiera ustawienia, komunikaty solvera i akcje kamery,
-- współrzędne uchwytów są przechowywane względnie względem plate'a,
-- istniejący `QGraphicsView` w panelu jest prototypem/fallbackiem i nie spełnia
-  docelowego UX etapu `6`.
-
 Warunek zakończenia:
 
-- compositor może dopasować kamerę bez opuszczania Nuke.
+- compositor może dopasować kamerę za pomocą panelu Lens Solver bez opuszczania Nuke.
 
 ## Etap 7 - Box Match
 
@@ -219,26 +211,19 @@ Cel: zapewnić intuicyjny tryb dopasowania kamery dla budynków i wnętrz.
 
 Zadania:
 
-- dodać wireframe prostopadłościanu jako overlay aktywnego Viewera,
+- dodać wireframe prostopadłościanu jako element kanwy panelu,
 - oznaczyć kierunki krawędzi kolorami osi świata: `X`, `Y`, `Z`,
-- pozwolić przesuwać kontrolne narożniki boxa na widoczne krawędzie obiektu,
+- pozwolić przesuwać kontrolne narożniki boxa na kanwie,
 - nie pozwalać przesuwać wszystkich ośmiu wierzchołków niezależnie,
 - zachować spójną perspektywę i geometrię prostopadłościanu,
 - wyprowadzać VP z grup krawędzi boxa i przekazywać je do solvera,
 - pozwolić wybrać narożnik boxa jako origin,
 - pozostawić ręczne linie VP jako tryb bazowy i diagnostyczny.
 
-Testy:
-
-- odzyskanie VP z syntetycznego wireframe boxa,
-- zachowanie ograniczeń po przesunięciu kontrolnych narożników,
-- wybór origin,
-- konfiguracje zdegenerowane, w tym VP w nieskończoności.
-
 Warunek zakończenia:
 
 - compositor może dopasować kamerę do bryły budynku lub wnętrza przez
-  przeciąganie kontrolnych narożników boxa w Viewerze.
+  przeciąganie kontrolnych narożników boxa w panelu.
 
 ## Etap 8 - reference distance
 
@@ -290,25 +275,9 @@ Zadania:
 - Etapy `0-2`: zakończone.
 - Etapy `3-4`: zakończone.
 - Etap `5`: zakończony dla centralnego principal point wymaganego przez MVP.
-- Etap `6`: panel, rejestracja menu, prototypowe uchwyty w `QGraphicsView`,
-  akcje kamery oraz podgląd EXR przez tymczasowy render proxy Nuke są
-  zaimplementowane. Etap nie jest zakończony, ponieważ edycja VP i origin musi
-  zostać przeniesiona bezpośrednio do aktywnego Viewera.
-- Następny krok: viewer overlay z draggable handles dla VP i origin, następnie
-  ręczna walidacja pełnego workflow na rzeczywistym plate EXR.
-
-Mapowanie macierzy `Camera2` jest potwierdzone testem integracyjnym uruchamianym w Nuke 15.1v4.
-Konwersja plate EXR do małego podglądu PNG jest potwierdzona osobnym testem runtime Nuke.
-
-## Lista ryzyk
-
-- Nuke może interpretować macierz `Camera2` inaczej niż oczekuje solver; rozstrzygają testy integracyjne.
-- `win_translate` wymaga potwierdzenia znaków oraz skalowania dla różnych aspect ratio.
-- Pionowe obrazy często ujawniają błędy w konwersji współrzędnych i FOV.
-- Linie prawie równoległe mogą generować bardzo odległe VP oraz niestabilne wyniki.
-- Plate with distortion obiektywu daje systematycznie błędną kamerę; UI powinno o tym informować.
-- Pobieranie obrazu z `Read` do PySide2 może wymagać kompromisu wydajnościowego dla wysokich rozdzielczości.
-
+- Etap `6`: zakończony. Narzędzie operuje jako dockowalny panel PySide2 z interaktywną kanwą, obsługą zoomu/panningu, etykietami osi, siatką podłogi oraz kontrolkami HUD (Fit, 1:1, Grid, Reset).
+- Etap `7`: zakończony. Dodano tryb dopasowania przez manipulację widocznymi krawędziami prostopadłościanu 3D na kanwie panelu (Box Match mode) z wyliczaniem linii w oparciu o solve.
+- Następny krok: Etap `8` (reference distance) - dodanie wyboru osi referencyjnej oraz dwóch uchwytów odcinka o znanej długości w celu nadania scenie skali.
 ## Definicja ukończenia produktu v1
 
-Wersja `v1` is ready, gdy użytkownik Nuke 15.1 może dopasować statyczną kamerę `Camera2` w trybie `2VP`, ustawić origin oraz skalę referencyjną, zapisać stan w skrypcie Nuke i po ponownym otwarciu kontynuować pracę bez utraty ustawień.
+Wersja `v1` jest gotowa, gdy użytkownik Nuke 15.1 może dopasować statyczną kamerę `Camera2` w trybie `2VP`, ustawić origin oraz skalę referencyjną, zapisać stan w skrypcie Nuke i po ponownym otwarciu kontynuować pracę bez utraty ustawień.
