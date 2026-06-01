@@ -28,6 +28,16 @@ torch, dostępność cv2. GPU conflict też znika — kalibracja to operacja one
 per plate (80–400 ms), nie realtime per-frame; w subprocess context CUDA jest
 izolowany, a CPU inference dla pojedynczej klatki jest akceptowalny.
 
+Odrzucona alternatywa — natywna ścieżka ML Nuke (CopyCat/Inference/Cattery, `.cat`,
+C++ libtorch): "błogosławiona" przez Foundry, ale zaprojektowana pod modele
+image→image. GeoCalib/PerspectiveFields zwracają PARAMETRY (focal, VP, gravity),
+nie obraz — nie pasują do formatu Inference node. Dlatego sidecar, nie `.cat`.
+
+Wymóg deploymentowy (kultura VFX/rez): sidecar MUSI pozwalać wskazać ISTNIEJĄCY
+env/interpreter (studio kontroluje własny pipeline, bywa offline/air-gapped).
+Auto-bootstrap ("Setup AI" button) to wygoda dla indie, NIE jedyna ścieżka —
+nie wymuszaj auto-download.
+
 ### 0.2 Wąski kontrakt AI → solver
 
 Warstwa AI oddaje do istniejącego solvera TYLKO dwie rzeczy:
