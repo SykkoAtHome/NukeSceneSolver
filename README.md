@@ -3,37 +3,24 @@
 Native Python tool for Foundry Nuke 15.1 that matches a `Camera2` node to
 perspective lines marked on a single image.
 
-The project is under active development. The current implementation contains
-the Nuke-independent geometry, a tested 2VP camera solver, a verified `Camera2`
-adapter, and a dockable PySide2 panel. See `PRD.md` and `PLAN.md` for scope and
-milestones.
+The plugin contains Nuke-independent geometry, a tested camera solver, a
+verified `Camera2` adapter, and a dockable PySide2 panel.
 
 ## Requirements
 
 - Foundry Nuke 15.1 for Nuke integration and UI work
-- Python 3.10 or newer for core development
-- `pytest` for unit tests
 
 Nuke 15.1v4 ships with Python 3.10.10 and PySide2. The core package deliberately
-does not import either `nuke` or Qt, so it can be tested with a regular Python
-interpreter.
+does not import either `nuke` or Qt.
 
-## Installation and Development
+## Installation
 
-Run the unit tests from the repository root:
-
-```powershell
-python -m pytest
-```
-
-### Installing in Nuke
-
-For daily use or development inside Nuke, add the repository plugin path to your
+Extract or clone the plugin and add its root directory to your
 `~/.nuke/init.py` (or `C:\Users\<user>\.nuke\init.py` on Windows):
 
 ```python
 import nuke
-nuke.pluginAddPath(r"D:/code/nuke_LensSolver")
+nuke.pluginAddPath(r"C:/path/to/nuke_LensSolver")
 ```
 
 Nuke then loads this repository's `init.py` and `menu.py` through its normal
@@ -43,8 +30,6 @@ Nodes toolbar on the left side.
 
 Your panel settings, viewport lines, and matching points are automatically saved 
 within the Nuke script (`.nk` file) and will be restored next time you open the panel.
-
-You can find example Nuke scripts and plate images for testing in the `nuke_files/` directory.
 
 Select one `Read` node and click `Use Selected Read`. Common Qt-supported image
 formats display directly in the panel. For formats such as EXR, the panel asks
@@ -82,17 +67,6 @@ plane constraint needed for absolute match-box placement; with the default
 grid. When a Box Match admits an equivalent floor-reflected solution, the
 solver prefers the Nuke camera placement above the `X/Z` floor in the `+Y`
 half-space.
-
-Run the Nuke integration checks from the repository root:
-
-```powershell
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_camera2_projection.py"
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_scene_helpers.py"
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_menu_registration.py"
-```
-
-Menu registration requires an interactive Nuke GUI session. The registration
-logic is covered by the regular unit tests.
 
 ## Core conventions
 
