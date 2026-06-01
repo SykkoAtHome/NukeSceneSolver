@@ -7,6 +7,52 @@
 
 ---
 
+## 0. ZASADY ARCHITEKTONICZNE (czytaj najpierw)
+
+Trzy decyzje, które wpływają na wszystko poniżej. Wynikają z review ryzyk
+technicznych — dominującym ryzykiem tego feature'a są CICHE BŁĘDY (złe wyniki bez
+crasha), nie crashe.
+
+### 0.1 Sidecar venv zamiast in-process
+
+NIE decyduj per-model "direct import vs subprocess". "Lekkość" zależności jest
+iluzją: `cvxpy` (GlobustVP) ciągnie skompilowane solvery (ECOS/SCS/OSQP) zbudowane
+przeciw konkretnemu ABI numpy — w Pythonie Nuke (zamrożone numpy/scipy) jest tak
+samo kruche jak PyTorch, a może bardziej (brak oficjalnych wheeli pod Nuke).
+Realny podział to: **czysty numpy/scipy vs cała reszta.**
+
+Decyzja: **jedno zewnętrzne środowisko CPython 3.10 (zwykły venv z
+torch + cv2 + cvxpy) wołane przez subprocess dla CAŁEJ pracy AI.** Komunikacja
+JSON + pliki obrazów. Jednym ruchem znika: ABI numpy, kontencja VRAM, wersjonowanie
+torch, dostępność cv2. GPU conflict też znika — kalibracja to operacja one-shot
+per plate (80–400 ms), nie realtime per-frame; w subprocess context CUDA jest
+izolowany, a CPU inference dla pojedynczej klatki jest akceptowalny.
+
+### 0.2 Wąski kontrakt AI → solver
+
+Warstwa AI oddaje do istniejącego solvera TYLKO dwie rzeczy:
+- listę segmentów jako `Segment2D` (w konwencji UI: top-left `(0,0)`, `(1,1)`),
+- `focal` jako `float`.
+
+NIE importuj pełnych ekstrinsyków (rotacji/macierzy) z GeoCalib. Niech
+przetestowany solver liczy rotację z VP jak dotąd. Powierzchnia ryzyka konwersji
+konwencji (Y-down vs Y-up, gravity convention, pixel vs normalized, principal
+point) kurczy się wtedy do DWÓCH testowalnych wartości zamiast całej macierzy
+kamery. To jest główna obrona przed cichymi błędami konwencji — najpoważniejszym
+ryzykiem technicznym całego feature'a.
+
+### 0.3 Bramki walidacyjne wszędzie
+
+Każdy etap AI może zwrócić pewny-ale-błędny wynik. Wymagane jawne gate'y:
+- **GlobustVP**: reprojection residual segmentów wspierających + test ortogonalności
+  odzyskanych VP względem K. Bez tego "fallback do GeoCalib" nigdy się nie odpali,
+  bo solver nie wie, że zawiódł.
+- **Konwersja konwencji**: golden testy z ground-truth kamerami (wzorzec
+  `tests/test_box_match.py` — projekcja znanej kamery → recover), gdzie wejście
+  pochodzi z pipeline'u AI zamiast manualnych handles.
+
+---
+
 ## 1. AI ASSIST
 
 User nadal rysuje linie i ustawia VP, ale AI daje mu podpowiedzi wizualne i numeryczne.
@@ -24,7 +70,12 @@ User nadal rysuje linie i ustawia VP, ale AI daje mu podpowiedzi wizualne i nume
 - Inference: ~300-500ms GPU
 
 **B) LSD auto-detect → kolorowe linie na Viewer**
-- OpenCV `cv2.createLineSegmentDetector()` — zero ML, jest w Nuke
+- OpenCV `cv2.createLineSegmentDetector()` — zero ML
+- UWAGA: NIEZWERYFIKOWANE, czy `cv2` jest w ogóle importowalne w Pythonie Nuke.
+  To założenie podpiera całe "zero dependencies" dla LSD. Rozstrzyga Faza 0.
+  Dodatkowo `createLineSegmentDetector` był usunięty w OpenCV 3.4.6–4.1.x
+  (kwestia licencji implementacji) i wrócił ~4.5.x — sprawdź wersję.
+  Fallback jeśli brak: `cv2.ximgproc.createFastLineDetector` lub LSD w sidecar venv.
 - Wykryj wszystkie segmenty linii na obrazie
 - Pogrupuj linie po kierunku (clustering kątowy — prosty k-means na orientacji)
 - Pokaż na Viewer pokolorowane grupy (np. czerwone = horizontal, niebieskie = vertical, zielone = trzeci kierunek)
@@ -66,9 +117,14 @@ User klika "Auto Calibrate" i dostaje gotowy Camera node + LensDistortion setup.
 - GlobustVP solver (CVPR 2025, `WU-CVGL/GlobustVP`, Apache 2.0)
 - Potrzebuje przybliżone K na wejściu — weź z GeoCalib (uruchom GeoCalib najpierw)
 - Daje: 3 VP (Manhattan) + line-VP associations
-- Zależności: numpy, scipy, cvxpy (zero ML)
+- Zależności: numpy, scipy, cvxpy — UWAGA: "zero ML" nie znaczy "lekkie".
+  `cvxpy` ciągnie skompilowane solvery (ECOS/SCS/OSQP) z C/C++ extensions i
+  zależnością od ABI numpy. W Pythonie Nuke kruche jak PyTorch → idzie do sidecar
+  venv, nie importuj wprost (patrz 0.1).
 - Inference: ~50ms
-- Uwaga: Manhattan World assumption — jeśli scena nie jest Manhattan, fallback do samego GeoCalib
+- Uwaga: Manhattan World assumption — jeśli scena nie jest Manhattan, fallback do
+  samego GeoCalib. Fallback wymaga JAWNEJ bramki wykrycia porażki (patrz 0.3) —
+  reprojection residual + ortogonalność VP; inaczej zwróci pewny-ale-błędny wynik.
 
 ### Pipeline Full Auto:
 ```
@@ -96,47 +152,92 @@ User klika "Auto Calibrate" i dostaje gotowy Camera node + LensDistortion setup.
 
 ## Podsumowanie modeli
 
+Wszystkie w sidecar venv (patrz 0.1). Kolumna "Zależności" pokazuje, czemu nawet
+"zero ML" nie znaczy "importowalne wprost w Nuke".
+
 | Model | Rola | Tryb | Co daje | Zależności | Speed GPU |
 |---|---|---|---|---|---|
-| **Perspective Fields** | Wizualny overlay | AI Assist | Up-vector field, Latitude field | PyTorch, ViT | ~400ms |
-| **LSD** (OpenCV) | Detekcja linii | Oba | Segmenty linii | OpenCV | <10ms |
-| **GeoCalib** | Parametry kamery | Oba | focal, k1, gravity | PyTorch, kornia | ~80ms |
-| **GlobustVP** | VP solver | Full Auto | 3 VP + line associations | numpy, scipy, cvxpy | ~50ms |
+| **Perspective Fields** | Wizualny overlay | AI Assist | Up-vector field, Latitude field | PyTorch, ViT (sidecar) | ~400ms |
+| **LSD** (OpenCV) | Detekcja linii | Oba | Segmenty linii | cv2 (sidecar; in-process tylko jeśli Faza 0 potwierdzi) | <10ms |
+| **GeoCalib** | Parametry kamery | Oba | focal, k1, gravity | PyTorch, kornia (sidecar) | ~80ms |
+| **GlobustVP** | VP solver | Full Auto | 3 VP + line associations | numpy, scipy, **cvxpy** (skompilowane solvery → sidecar) | ~50ms |
 
 ### Czego żaden z nich nie daje:
 - **k2, k3, p1, p2** (pełna dystorsja) — fallback: manualny grid solve lub opcjonalnie DBC
 - **Anamorphic squeeze** — manual
 - **Sensor size** — EXIF lookup lub manual
-- **Principal point** — GeoCalib zakłada centrum; Perspective Fields może pomóc wykryć shift
+- **Principal point** — GeoCalib NIE estymuje shiftu PP (zakłada centrum);
+  Perspective Fields też nie daje PP wprost. Solver wspiera off-center PP
+  (`win_translate`) i istnieje feature "Auto PP". Konsekwencja: przy realnym
+  shifcie PP (lens shift / wykadrowany plate) focal z AI jest OBCIĄŻONY, a
+  AI-estimate może "walczyć" z Auto PP. Komunikuj jako caveat dokładności.
 
 ---
 
 ## Deployment
 
 ### AI Assist (minimum viable):
-GeoCalib + LSD — to wystarczy na dobry assist. Perspective Fields jest opcjonalny bonus (cięższy, ale ładny UX). LSD jest w OpenCV = zero dodatkowych zależności.
+GeoCalib + LSD — to wystarczy na dobry assist. Perspective Fields jest opcjonalny
+bonus (cięższy, ale ładny UX). Wszystko przez sidecar venv (patrz 0.1) — nie zakładaj
+"zero dependencies", dopóki Faza 0 nie potwierdzi cv2 w Pythonie Nuke.
 
 ### Full Auto:
-GeoCalib + LSD + GlobustVP. GlobustVP nie wymaga ML (numpy/scipy/cvxpy) więc jest lekki. Jedyny ciężki element to GeoCalib (PyTorch + kornia).
+GeoCalib + LSD + GlobustVP. GlobustVP (cvxpy) NIE jest "lekki" — idzie do sidecar
+venv razem z resztą (patrz 0.1). Cały AI stack żyje w jednym zewnętrznym env.
 
 ### Deployment priority:
 ```
-Faza 1: GeoCalib + LSD           → AI Assist (sidebar values + kolorowe linie)
-Faza 2: + GlobustVP               → Full Auto (magic button)
+Faza 0: Probe env w Nuke + setup sidecar venv → fundament (patrz niżej)
+Faza 1: GeoCalib (focal) + LSD   → AI Assist (sidebar values + kolorowe linie)
+Faza 2: + GlobustVP               → Full Auto (magic button) + bramki walidacyjne
 Faza 3: + Perspective Fields      → Rich overlay (Up-vector/Latitude viz)
 ```
 
-### Integracja z Nuke:
-- **LSD** — `cv2.createLineSegmentDetector()` — prawdopodobnie dostępny już w Nuke Python
-- **GlobustVP** — pure Python (numpy/scipy/cvxpy) — importowalny wprost w Nuke Python, zero PyTorch
-- **GeoCalib** — wymaga PyTorch + kornia → sprawdź `torch.__version__` w Nuke, jeśli pasuje: direct import. Jeśli nie: subprocess.
-- **Perspective Fields** — PyTorch + ViT → jak GeoCalib, ten sam env
+### Faza 0 — obowiązkowa, przed czymkolwiek:
+Skrypt uruchomiony WEWNĄTRZ Pythona Nuke, wypisuje stan env. Wynik determinuje
+architekturę (in-process vs sidecar):
+```python
+import sys; print(sys.version)
+try: import cv2; print("cv2", cv2.__version__); cv2.createLineSegmentDetector()
+except Exception as e: print("cv2:", e)
+try: import torch; print("torch", torch.__version__, torch.cuda.is_available())
+except Exception as e: print("torch:", e)
+import numpy, scipy; print("numpy", numpy.__version__, "scipy", scipy.__version__)
+```
+Następnie: setup sidecar venv (CPython 3.10 + torch + cv2 + cvxpy) i protokół
+JSON + pliki obrazów między Nuke a sidecar.
+
+### Integracja z Nuke (po decyzji 0.1):
+- Cały AI stack (LSD / GeoCalib / GlobustVP / Perspective Fields) żyje w sidecar
+  venv, wołany przez subprocess. Nuke przekazuje ścieżkę do obrazu + parametry
+  jako JSON, odbiera segmenty + focal (+ opcjonalnie mapy overlay) jako JSON/plik.
+- Wyjątek: jeśli Faza 0 potwierdzi natywne cv2 w Nuke, LSD MOŻE iść in-process
+  jako optymalizacja — ale to opcjonalna ścieżka, nie założenie architektury.
+
+### Nowy moduł: `scene_solver.ai`
+Izolowany od `core` (które pozostaje czysto geometryczne, bez ML, bez Qt, bez nuke).
+`scene_solver.ai` produkuje dane w formatach zrozumiałych dla solvera: `Segment2D`
+oraz `focal: float` (patrz kontrakt 0.2). Zarządza też subprocess do sidecar venv.
+
+### Strategia testów (chroni szybki suite 81 testów):
+- Rdzeń (`core`) zostaje deterministyczny i szybki — bez ML, bez GPU.
+- Golden testy warstwy AI pod osobnym markerem `@pytest.mark.ai`, wykluczone z
+  domyślnego runu. Wzorzec `tests/test_box_match.py`: projekcja znanej kamery →
+  recover, z pasmami tolerancji, na 1–2 zacommitowanych sample plate'ach.
+- Testy konsumenta (solver) na syntetycznych wejściach AI-kształtnych (Segment2D +
+  focal) — deterministyczne, bez ładowania modeli.
+
+### Dystrybucja wag modeli:
+GeoCalib (~dziesiątki MB) + Perspective Fields z ViT (większy, łącznie ~100–500 MB).
+Rozwiąż: kiedy pobierać (lazy on first use), gdzie cache'ować, zachowanie offline,
+wersjonowanie wag. Sprawdź licencje WAG (nie tylko kodu) — część modeli ma licencje
+research/non-commercial, co ma znaczenie dla komercyjnego pipeline'u VFX.
 
 ---
 
 ## Ograniczenia — komunikuj userowi
 
-- **Full Auto zakłada Manhattan World** (GlobustVP) — na scenach bez ortogonalnej geometrii VP nie będą znalezione. Wtedy fallback do GeoCalib-only estimate.
+- **Full Auto zakłada Manhattan World** (GlobustVP) — na scenach bez ortogonalnej geometrii VP nie będą znalezione. Wtedy fallback do GeoCalib-only estimate. Fallback wyzwala JAWNA bramka (residual + ortogonalność, patrz 0.3) — nie cisza.
 - **Dystorsja tylko k1** — na złożonej dystorsji fallback do manualnego grid solve.
 - **GeoCalib trenowany głównie na architekturze/street** — na close-upach, shallow DOF, naturze: mniej dokładny. AI Assist overlay (Perspective Fields) wciąż działa.
 - **Wyniki to initial guess** — AI Assist i Full Auto to punkt startowy, nie finalny wynik.
