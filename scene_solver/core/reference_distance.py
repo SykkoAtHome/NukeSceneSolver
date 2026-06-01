@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import isfinite
 
+from scene_solver.core.axes import world_axis_vector
 from scene_solver.core.coordinates import ImageDimensions, ui_to_solver
 from scene_solver.core.models import (
     DEFAULT_TOLERANCE,
@@ -15,17 +16,6 @@ from scene_solver.core.models import (
     Vector3D,
 )
 from scene_solver.core.projection import solver_point_to_camera_ray
-
-
-AXIS_VECTORS = {
-    "+X": Vector3D(1.0, 0.0, 0.0),
-    "-X": Vector3D(-1.0, 0.0, 0.0),
-    "+Y": Vector3D(0.0, 1.0, 0.0),
-    "-Y": Vector3D(0.0, -1.0, 0.0),
-    "+Z": Vector3D(0.0, 0.0, 1.0),
-    "-Z": Vector3D(0.0, 0.0, -1.0),
-}
-
 
 @dataclass(frozen=True, slots=True)
 class ReferenceDistanceInput:
@@ -105,15 +95,6 @@ def calibrate_reference_distance(
         ),
         warnings=tuple(warnings),
     )
-
-
-def world_axis_vector(axis: str) -> Vector3D:
-    try:
-        return AXIS_VECTORS[axis.upper()]
-    except (AttributeError, KeyError) as error:
-        raise GeometryError(
-            f"Unsupported world axis {axis!r}. Expected one of: {', '.join(AXIS_VECTORS)}."
-        ) from error
 
 
 def world_ray_from_ui(

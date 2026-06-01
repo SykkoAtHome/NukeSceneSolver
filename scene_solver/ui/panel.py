@@ -51,10 +51,13 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._plate: PlateInfo | None = None
         self._last_result: SolveResult | None = None
         self._last_box_dimension: BoxDimensionCalibration | None = None
-        self._is_loading_state = False
+        self._is_loading_state = True
         self._build_ui()
         self._connect_signals()
-        self._load_state_from_nuke()
+        try:
+            self._load_state_from_nuke()
+        finally:
+            self._is_loading_state = False
         self._refresh_solution()
 
     def _build_ui(self) -> None:
@@ -448,13 +451,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         if self._last_result.ok:
             # Update canvas principal point if it was auto-calculated
             if principal_point is None:
-                self._canvas._is_internal_update = True
-                try:
-                    self._canvas._handles["principal_point"].set_relative_position(
-                        self._last_result.principal_point_ui
-                    )
-                finally:
-                    self._canvas._is_internal_update = False
+                self._canvas.set_principal_point(self._last_result.principal_point_ui)
         
         if scale_error is not None:
             self._show_error(scale_error)
@@ -489,7 +486,6 @@ class SceneSolverPanel(QtWidgets.QWidget):
         if not state:
             return
         
-        self._is_loading_state = True
         try:
             # Restore UI controls
             if "match_type" in state:
@@ -557,8 +553,8 @@ class SceneSolverPanel(QtWidgets.QWidget):
             # Restore Canvas state
             if "canvas" in state:
                 self._canvas.set_state(state["canvas"])
-        finally:
-            self._is_loading_state = False
+        except (KeyError, TypeError, ValueError):
+            return
 
     def _save_state_to_nuke(self) -> None:
         if self._is_loading_state:

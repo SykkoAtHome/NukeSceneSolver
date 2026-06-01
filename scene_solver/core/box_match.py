@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from math import isclose, isfinite
 
+from scene_solver.core.axes import flipped_world_axis, normalized_world_axis_name
 from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Segment2D
 
 
@@ -111,7 +112,9 @@ def solve_box_match(solve_input, corners: Mapping[str, Point2D]):
     )
     result = solve_2vp(oriented_input)
     if _is_reflected_below_nuke_ground_plane(result, oriented_input):
-        return solve_2vp(replace(oriented_input, first_axis=_flipped_axis(oriented_input.first_axis)))
+        return solve_2vp(
+            replace(oriented_input, first_axis=flipped_world_axis(oriented_input.first_axis))
+        )
     return result
 
 
@@ -235,17 +238,7 @@ def _axis_oriented_by_segments(
         score += direction.dot(to_vanishing_point)
     if abs(score) <= DEFAULT_TOLERANCE:
         raise GeometryError("Could not resolve match-box axis direction.")
-    return axis if score > 0.0 else _flipped_axis(axis)
-
-
-def _flipped_axis(axis: str) -> str:
-    try:
-        sign, name = axis[0], axis[1:].upper()
-    except (IndexError, TypeError) as error:
-        raise GeometryError(f"Unsupported world axis {axis!r}.") from error
-    if sign not in ("+", "-") or name not in ("X", "Y", "Z"):
-        raise GeometryError(f"Unsupported world axis {axis!r}.")
-    return f"{'-' if sign == '+' else '+'}{name}"
+    return axis if score > 0.0 else flipped_world_axis(axis)
 
 
 def _is_reflected_below_nuke_ground_plane(result, solve_input) -> bool:
@@ -262,12 +255,9 @@ def _is_reflected_below_nuke_ground_plane(result, solve_input) -> bool:
 
 def _dimension_axis(axis: str) -> str:
     try:
-        normalized = axis.upper().strip("+-")
-    except AttributeError as error:
+        return normalized_world_axis_name(axis)
+    except GeometryError as error:
         raise GeometryError(f"Unsupported match-box dimension axis {axis!r}.") from error
-    if normalized not in ("X", "Y", "Z"):
-        raise GeometryError(f"Unsupported match-box dimension axis {axis!r}.")
-    return normalized
 
 
 def _dimension_length(size, axis: str) -> float:

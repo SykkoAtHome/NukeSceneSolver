@@ -153,8 +153,8 @@ def main() -> None:
     assert result.ok
     
     camera = create_camera(result, name="SceneSolverOffCenterTest")
-    assert_close(camera["win_translate"].value(0), (0.5 - 0.65) * 2.0)
-    assert_close(camera["win_translate"].value(1), (0.38 - 0.5) * 2.0)
+    assert_close(camera["win_translate"].value(0), 0.5 - 0.65)
+    assert_close(camera["win_translate"].value(1), (0.38 - 0.5) * DIMENSIONS.height_relative_to_width)
     
     # In Nuke, the principal point is where the optical axis projects.
     # If win_translate is correct, projecting a point at (0, 0, -f) in camera space 

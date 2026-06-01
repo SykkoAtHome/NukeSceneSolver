@@ -36,9 +36,7 @@ def create_scene_grid(
     texture = nuke.nodes.Grid(name=f"{name}Texture")
     card = nuke.nodes.Card2(name=name)
     card.setInput(0, texture)
-    _set_vector_knob(card, "translate", Vector3D(0.0, 0.0, 0.0))
-    _set_vector_knob(card, "rotate", GROUND_PLANE_ROTATION)
-    _set_vector_knob(card, "scaling", Vector3D(size, size, size))
+    _configure_ground_card(card, size)
     return SceneGridNodes(texture=texture, card=card)
 
 
@@ -53,10 +51,14 @@ def create_origin_card(
     _validate_size(size)
     nuke = nuke_module or _import_nuke()
     card = nuke.nodes.Card2(name=name)
+    _configure_ground_card(card, size)
+    return card
+
+
+def _configure_ground_card(card: Any, size: float) -> None:
     _set_vector_knob(card, "translate", Vector3D(0.0, 0.0, 0.0))
     _set_vector_knob(card, "rotate", GROUND_PLANE_ROTATION)
     _set_vector_knob(card, "scaling", Vector3D(size, size, size))
-    return card
 
 
 def create_match_box(

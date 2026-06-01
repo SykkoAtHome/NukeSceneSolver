@@ -33,7 +33,7 @@ For daily use or development inside Nuke, add the repository plugin path to your
 
 ```python
 import nuke
-nuke.pluginAddPath(r"D:/code/nuke_SceneSolver")
+nuke.pluginAddPath(r"D:/code/nuke_LensSolver")
 ```
 
 Nuke then loads this repository's `init.py` and `menu.py` through its normal
@@ -87,8 +87,8 @@ Run the Nuke integration checks from the repository root:
 
 ```powershell
 & "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_camera2_projection.py"
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_read_preview.py"
-& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe --tg -V 0 ".\nuke_tests\test_panel_smoke.py"
+& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_scene_helpers.py"
+& "C:\Program Files\Nuke15.1v4\Nuke15.1.exe" --safe -t -V 0 ".\nuke_tests\test_menu_registration.py"
 ```
 
 Menu registration requires an interactive Nuke GUI session. The registration
@@ -111,8 +111,5 @@ logic is covered by the regular unit tests.
 
 ## Current limitations
 
-- The `Camera2` adapter currently accepts the MVP principal point `(0.5, 0.5)`.
-- Off-center principal points and `win_translate` mapping remain deferred to
-  the explicit lens-shift milestone.
 - Updating a parented `Camera2` node is rejected to avoid silently applying a
   local matrix where a world matrix was intended.

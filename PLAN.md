@@ -11,7 +11,7 @@
 ## Docelowa struktura repo
 
 ```text
-nuke_SceneSolver/
+nuke_LensSolver/
   README.md
   PRD.md
   PLAN.md

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 from PySide2 import QtCore, QtGui, QtWidgets
 
-from scene_solver.core import BOX_EDGES, SolveResult, box_axis_segments
+from scene_solver.core import (
+    BOX_CORNER_NAMES,
+    BOX_EDGES,
+    GeometryError,
+    SolveResult,
+    box_axis_segments,
+    world_axis_index,
+)
 from scene_solver.core.models import Point2D, Segment2D, Vector3D
 from scene_solver.core.coordinates import ui_to_solver
 from scene_solver.core.projection import solver_point_to_camera_ray
@@ -206,7 +211,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             )
             self._handles["principal_point"].setToolTip("Principal Point (Optical Center)")
             self._create_principal_point_crosshair()
-            
+
             self._create_segment(
                 "reference",
                 DEFAULT_POSITIONS["reference_start"],
@@ -215,11 +220,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             )
             self._labels["reference"].setText("Reference")
             self.set_reference_visible(False)
-            
+
             # Create 8 box handles
-            box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
-                          "box_v001", "box_v101", "box_v011", "box_v111")
-            for name in box_vnames:
+            for name in BOX_CORNER_NAMES:
                 # Color code: origin yellow, X red, Y blue, Z green, mixed white
                 color = "#ffffff"
                 if name == "box_v100": color = "#ff5c5c"
@@ -309,9 +312,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                         self._lines[name].setVisible(not is_box)
                 
         # Box handles
-        box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
-                      "box_v001", "box_v101", "box_v011", "box_v111")
-        for name in box_vnames:
+        for name in BOX_CORNER_NAMES:
             if name in self._handles:
                 self._handles[name].setVisible(is_box)
         
@@ -319,7 +320,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             self._box_is_default = True
             # Store current positions of ALL handles to detect deltas
             self._last_box_positions = {
-                vname: self._handles[vname].relative_position() for vname in box_vnames
+                name: self._handles[name].relative_position() for name in BOX_CORNER_NAMES
             }
                 
         if hasattr(self, "_origin_label"):
@@ -332,9 +333,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         if self._mode == "box" and self._box_is_default:
             self._is_dragging_box = True
             # Update cache before drag starts
-            box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
-                          "box_v001", "box_v101", "box_v011", "box_v111")
-            for name in box_vnames:
+            for name in BOX_CORNER_NAMES:
                 self._last_box_positions[name] = self._handles[name].relative_position()
 
     def _on_box_released(self) -> None:
@@ -384,7 +383,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         except ValueError:
             return 0.0
         world_ray = result.camera_to_world_matrix.transform_direction(camera_ray).normalized()
-        
+
         C = result.camera_position
         C_cross_R = C.cross(world_ray)
         D_cross_R = world_axis.cross(world_ray)
@@ -399,6 +398,15 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         if name == "X": return Vector3D(sign, 0.0, 0.0)
         if name == "Y": return Vector3D(0.0, sign, 0.0)
         return Vector3D(0.0, 0.0, sign)
+
+    def set_principal_point(self, point: Point2D) -> None:
+        """Update the principal-point handle without emitting an intermediate solve."""
+
+        self._is_internal_update = True
+        try:
+            self._handles["principal_point"].set_relative_position(point)
+        finally:
+            self._is_internal_update = False
 
     def update_grid(self, result: SolveResult | None, axis1: str = "+X", axis2: str = "+Z") -> None:
         """Draw a perspective grid on the ground plane if the solve is valid."""
@@ -445,12 +453,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
 
         # Map grid coords [u, v] to world [x, y, z] based on selected axes
         try:
-            ax1_name = axis1.strip("+-")
-            ax2_name = axis2.strip("+-")
-            ax_map = {"X": 0, "Y": 1, "Z": 2}
-            ax1_idx = ax_map[ax1_name]
-            ax2_idx = ax_map[ax2_name]
-        except (KeyError, AttributeError):
+            ax1_idx = world_axis_index(axis1)
+            ax2_idx = world_axis_index(axis2)
+        except GeometryError:
             return
 
         steps = 10
@@ -665,10 +670,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
     def match_box_corners(self) -> dict[str, Point2D]:
         return {
             name: self._handles[name].relative_position()
-            for name in (
-                "box_v000", "box_v100", "box_v010", "box_v110",
-                "box_v001", "box_v101", "box_v011", "box_v111",
-            )
+            for name in BOX_CORNER_NAMES
         }
 
     def mode(self) -> str:
@@ -721,13 +723,10 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
 
             # Box interaction logic
             if self._mode == "box" and hasattr(self, "_last_box_positions"):
-                box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
-                              "box_v001", "box_v101", "box_v011", "box_v111")
-                
                 # Find which handle moved
                 moved_name = None
                 dx, dy = 0.0, 0.0
-                for name in box_vnames:
+                for name in BOX_CORNER_NAMES:
                     p = self._handles[name].relative_position()
                     last_p = self._last_box_positions.get(name)
                     if not last_p: continue
@@ -742,7 +741,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                         # Translate WHOLE box during the whole drag
                         self._is_internal_update = True
                         try:
-                            for name in box_vnames:
+                            for name in BOX_CORNER_NAMES:
                                 if name == moved_name: continue
                                 p = self._handles[name].relative_position()
                                 self._handles[name].set_relative_position(Point2D(p.x + dx, p.y + dy))
@@ -750,7 +749,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                             self._is_internal_update = False
                     
                     # Update cache for next incremental move
-                    for name in box_vnames:
+                    for name in BOX_CORNER_NAMES:
                         self._last_box_positions[name] = self._handles[name].relative_position()
 
         # Update Origin label position
@@ -792,7 +791,6 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             if name == "reference" and not self._reference_visible:
                 line.setVisible(False)
                 continue
-            
             # Hide manual VP lines entirely in box mode. Reference line remains editable.
             if is_box and name in ("vp1_a", "vp1_b", "vp2_a", "vp2_b", "vp3_a", "vp3_b"):
                 line.setVisible(False)
@@ -863,9 +861,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             # Make sure to update the box layout state
             if self._mode == "box":
                 self._box_is_default = False
-                box_vnames = ("box_v000", "box_v100", "box_v010", "box_v110",
-                              "box_v001", "box_v101", "box_v011", "box_v111")
-                for name in box_vnames:
+                for name in BOX_CORNER_NAMES:
                     if name in self._handles:
                         self._last_box_positions[name] = self._handles[name].relative_position()
         finally:

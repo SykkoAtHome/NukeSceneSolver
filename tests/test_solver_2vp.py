@@ -322,6 +322,36 @@ def test_solver_returns_error_for_parallel_lines() -> None:
     assert any("parallel" in error for error in result.errors)
 
 
+def test_solver_returns_error_for_invalid_image_dimensions() -> None:
+    solve_input = SolveInput(
+        image_width=0,
+        image_height=1080,
+        vp1_segments=segments_for_vp(Point2D(0.2, 0.3)),
+        vp2_segments=segments_for_vp(Point2D(0.7, 0.8)),
+    )
+
+    result = solve_2vp(solve_input)
+
+    assert not result.ok
+    assert any("dimensions" in error for error in result.errors)
+
+
+def test_one_vp_solver_returns_error_for_invalid_focal_length() -> None:
+    result = solve_2vp(
+        SolveInput(
+            image_width=1920,
+            image_height=1080,
+            vp1_segments=segments_for_vp(Point2D(0.2, 0.3)),
+            vp2_segments=(Segment2D(Point2D(0.1, 0.4), Point2D(0.9, 0.4)),),
+            known_focal_length_mm=0.0,
+            mode="1vp",
+        )
+    )
+
+    assert not result.ok
+    assert any("Focal length" in error for error in result.errors)
+
+
 @pytest.mark.parametrize(
     ("field", "value", "expected_error"),
     (

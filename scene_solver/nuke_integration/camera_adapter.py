@@ -6,10 +6,9 @@ The core solver uses Nuke's classic local camera convention directly: local
 
 from __future__ import annotations
 
-from math import isclose
 from typing import Any
 
-from scene_solver.core.models import Matrix4, Vector3D
+from scene_solver.core.models import Matrix4
 from scene_solver.core.solver_2vp import SolveResult
 
 
@@ -60,11 +59,12 @@ def update_camera(camera: Any, result: SolveResult) -> Any:
     camera["win_scale"].setValue(1.0, 0)
     camera["win_scale"].setValue(1.0, 1)
     
-    # Map principal point shift to win_translate.
-    # Nuke win_translate 1.0 shifts the window by the full aperture width.
-    # Our UI coordinates are [0, 1], so shift from center (0.5) is multiplied by 2.
-    win_tx = (0.5 - result.principal_point_ui.x) * 2.0
-    win_ty = (result.principal_point_ui.y - 0.5) * 2.0
+    # Nuke normalizes both window offsets by the horizontal aperture.
+    win_tx = 0.5 - result.principal_point_ui.x
+    win_ty = (
+        (result.principal_point_ui.y - 0.5)
+        * result.image_dimensions.height_relative_to_width
+    )
     camera["win_translate"].setValue(win_tx, 0)
     camera["win_translate"].setValue(win_ty, 1)
     

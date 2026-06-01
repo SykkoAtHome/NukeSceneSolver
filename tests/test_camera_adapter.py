@@ -146,5 +146,5 @@ def test_update_camera_sets_win_translate_for_off_center_principal_point() -> No
     update_camera(camera, result)
 
     assert result.ok
-    assert camera["win_translate"].values[0] == pytest.approx((0.5 - 0.65) * 2.0)
-    assert camera["win_translate"].values[1] == pytest.approx((0.38 - 0.5) * 2.0)
+    assert camera["win_translate"].values[0] == pytest.approx(0.5 - 0.65)
+    assert camera["win_translate"].values[1] == pytest.approx((0.38 - 0.5) * 1080 / 1920)

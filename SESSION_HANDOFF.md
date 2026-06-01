@@ -1,7 +1,7 @@
 # Nuke Scene Solver - project memory
 
-Updated: 2026-05-31
-Workspace: `D:\code\nuke_SceneSolver`
+Updated: 2026-06-01
+Workspace: `D:\code\nuke_LensSolver`
 Target: Foundry Nuke `15.1v4`
 
 ## Read first
@@ -206,7 +206,7 @@ python -m pytest -q
 Last result:
 
 ```text
-60 passed
+81 passed
 ```
 
 Compile check:
@@ -234,8 +234,9 @@ workflow works correctly.
 
 ## Camera2 limitations
 
-- Central principal point `(0.5, 0.5)` is supported.
-- Off-center principal point mapping through `win_translate` is deferred.
+- Central and off-center principal points are supported through `win_translate`.
+- The renderer-backed Camera2 projection check passed for centered and
+  off-center principal points on 2026-06-01.
 - Updating parented `Camera2` nodes is rejected because the adapter currently
   writes an unparented world transform.
 - Do not silently relax either limitation without targeted tests.
@@ -254,7 +255,7 @@ Install the development plugin once in `C:\Users\<user>\.nuke\init.py`:
 
 ```python
 import nuke
-nuke.pluginAddPath(r"D:/code/nuke_SceneSolver")
+nuke.pluginAddPath(r"D:/code/nuke_LensSolver")
 ```
 
 Nuke loads this repository's `init.py` and `menu.py` through normal plugin
@@ -262,4 +263,5 @@ discovery. Do not add a second Scene Solver import to the user's `.nuke/menu.py`
 
 ## Next work
 
-Continue with stage 9 principal-point and optics work from `PLAN.md`.
+Keep Nuke integration validation manual. Continue with focused maintenance work
+from `PLAN.md` and preserve the tested camera conventions.

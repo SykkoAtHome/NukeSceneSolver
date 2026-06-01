@@ -5,12 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from scene_solver.core.axes import missing_world_axis, world_axis_vector
 from scene_solver.core.box_match import BOX_CORNER_NAMES
 from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Vector3D
 from scene_solver.core.reference_distance import (
     axis_coordinate_from_ui,
     world_ray_from_ui,
-    world_axis_vector,
 )
 from scene_solver.core.solver_2vp import SolveResult
 
@@ -51,7 +51,7 @@ def reconstruct_match_box(
     axis2 = world_axis_vector(second_axis)
     if abs(axis1.dot(axis2)) > DEFAULT_TOLERANCE:
         raise GeometryError("Match box axes must be perpendicular.")
-    axis3 = _missing_axis_vector(first_axis, second_axis)
+    axis3 = world_axis_vector(missing_world_axis(first_axis, second_axis))
     focal_plane_distance = result.relative_focal_length / 2.0
     common = {
         "dimensions": result.image_dimensions,
@@ -164,27 +164,3 @@ def reconstruct_match_box(
 
 def _average(first: float, second: float) -> float:
     return (first + second) * 0.5
-
-
-def _missing_axis_vector(first_axis: str, second_axis: str) -> Vector3D:
-    """Return the right-handed third axis regardless of input axis order."""
-
-    axis_by_index = {
-        _axis_index(first_axis): world_axis_vector(first_axis),
-        _axis_index(second_axis): world_axis_vector(second_axis),
-    }
-    if len(axis_by_index) != 2:
-        raise GeometryError("Match box axes must be different.")
-    missing_axis = ({0, 1, 2} - set(axis_by_index)).pop()
-    if missing_axis == 0:
-        return axis_by_index[1].cross(axis_by_index[2]).normalized()
-    if missing_axis == 1:
-        return axis_by_index[2].cross(axis_by_index[0]).normalized()
-    return axis_by_index[0].cross(axis_by_index[1]).normalized()
-
-
-def _axis_index(axis: str) -> int:
-    try:
-        return {"X": 0, "Y": 1, "Z": 2}[axis.upper().strip("+-")]
-    except (AttributeError, KeyError) as error:
-        raise GeometryError(f"Unsupported world axis {axis!r}.") from error
