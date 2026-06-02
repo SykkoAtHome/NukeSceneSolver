@@ -150,6 +150,13 @@ Current UI handling:
   coordinate.
 - For the `X/Z` floor workflow, Box Match resolves the floor-reflection
   ambiguity by preferring a camera in the `+Y` half-space.
+- The VP/line solver (`solve_2vp`, non-box modes) applies the same `+Y`
+  half-space canonicalization for the X/Z ground frame
+  (`_reflects_below_nuke_floor`). A vanishing point is identical for an axis and
+  its reverse, so one mis-drawn ground line yields a det-`+1` frame with the
+  camera below the floor; the 2D overlay reprojects identically, so the flip is
+  invisible until the camera is exported. It corrects only the floor reflection,
+  not the residual 180° yaw ambiguity.
 
 The floor-reflection rule was added after manual Nuke validation showed an
 otherwise correct export mirrored vertically through the floor.

@@ -205,6 +205,27 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             second_camera_direction,
             second_axis,
         )
+        if _reflects_below_nuke_floor(
+            solve_input.mode,
+            first_axis,
+            second_axis,
+            _camera_to_world_rotation(columns),
+            dimensions=dimensions,
+            principal_point=principal_point,
+            focal_plane_distance=focal_plane_distance,
+            origin=solve_input.origin,
+        ):
+            # A vanishing point is identical for an axis and its reverse, so one
+            # mis-drawn ground line mirrors the camera through the X/Z floor.
+            # Flipping a single ground axis sign also flips the cross-product up
+            # axis, restoring Nuke's +Y half-space without breaking handedness.
+            first_axis = (first_axis[0], -first_axis[1])
+            columns = _world_to_camera_columns(
+                first_camera_direction,
+                first_axis,
+                second_camera_direction,
+                second_axis,
+            )
         camera_to_world_rotation = _camera_to_world_rotation(columns)
         _validate_rotation(camera_to_world_rotation)
 
@@ -571,6 +592,36 @@ def _world_to_camera_columns(
 
 def _missing_axis_index(first_axis: int, second_axis: int) -> int:
     return ({0, 1, 2} - {first_axis, second_axis}).pop()
+
+
+def _reflects_below_nuke_floor(
+    mode: str,
+    first_axis: tuple[int, float],
+    second_axis: tuple[int, float],
+    camera_to_world_rotation: Matrix4,
+    *,
+    dimensions: ImageDimensions,
+    principal_point: Point2D,
+    focal_plane_distance: float,
+    origin: Point2D,
+) -> bool:
+    """Detect the floor-reflected line solve for Nuke's X/Z ground workflow.
+
+    Mirrors box mode's ``_is_reflected_below_nuke_ground_plane``: only the X/Z
+    ground frame has a Y up axis to canonicalize, and box mode runs its own
+    correction, so this stays scoped to the line modes.
+    """
+    if mode == "box":
+        return False
+    if {first_axis[0], second_axis[0]} != {world_axis_index("X"), world_axis_index("Z")}:
+        return False
+    origin_solver = ui_to_solver(origin, dimensions, principal_point)
+    origin_world_ray = camera_to_world_rotation.transform_direction(
+        solver_point_to_camera_ray(origin_solver, focal_plane_distance)
+    )
+    # camera_position == origin_world_ray * -camera_distance, so a +Y origin ray
+    # places the camera below the floor regardless of the (positive) scale.
+    return origin_world_ray.y > DEFAULT_TOLERANCE
 
 
 def _require_column(column: Vector3D | None) -> Vector3D:
