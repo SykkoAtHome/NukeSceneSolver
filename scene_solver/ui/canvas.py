@@ -14,10 +14,21 @@ from scene_solver.core import (
 from scene_solver.core.coordinates import solver_to_ui
 from scene_solver.core.models import Point2D, Segment2D
 from scene_solver.core.projection import world_plane_horizon_solver_line
-from scene_solver.ui.axis_display import axis_arrow_heading, axis_color
+from scene_solver.ui.axis_display import AXIS_COLORS, axis_arrow_heading, axis_color
+from scene_solver.ui.snapping import nearest_snap_target
 
 
 HANDLE_RADIUS = 8.0
+
+# Box edges always use the fixed convention first=X, second=Z, height=Y. Map
+# each of the three BOX_AXIS_EDGES families (in that order) to its world-axis
+# colour in the shared Nuke-gizmo palette (AXIS_COLORS is indexed X=0, Y=1, Z=2).
+BOX_FAMILY_WORLD_AXIS = (0, 2, 1)  # first->X, second->Z, height->Y
+
+# Origin snap: target radius in screen pixels and the darkest the Dim overlay
+# may push the plate (kept below 1.0 so the plate never fully disappears).
+SNAP_THRESHOLD_PX = 15.0
+DIM_MAX_ALPHA = 0.85
 
 
 def _clip_segment_to_rect(
@@ -211,6 +222,8 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._horizon_visible = True
         self._extend_visible = False
         self._reference_visible = False
+        self._snap_enabled = False
+        self._dim_enabled = False
         self._mode = "lines"
         self._last_grid_result: SolveResult | None = None
         self._last_grid_axes = ("X", "Z")
@@ -226,6 +239,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._grid_btn = None
         self._horizon_btn = None
         self._extend_btn = None
+        self._snap_btn = None
+        self._dim_btn = None
+        self._dim_slider = None
         self._reset_btn = None
         self._hud_style = ""
         
@@ -245,6 +261,14 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._plate_item = QtWidgets.QGraphicsPixmapItem()
         self._plate_item.setZValue(0.0)
         self._scene.addItem(self._plate_item)
+        # Dim overlay: semi-transparent black rect above the plate (z=0) but
+        # below every overlay item (z>=1.0) so handles/lines stay full bright.
+        self._dim_rect = QtWidgets.QGraphicsRectItem(self._plate_rect)
+        self._dim_rect.setPen(QtCore.Qt.NoPen)
+        self._dim_rect.setBrush(QtGui.QBrush(QtGui.QColor(0, 0, 0, 0)))
+        self._dim_rect.setZValue(0.2)
+        self._dim_rect.setVisible(False)
+        self._scene.addItem(self._dim_rect)
         self._placeholder = self._scene.addText("Select a Read node to load a plate")
         self._placeholder.setDefaultTextColor(QtGui.QColor("#b8bcc2"))
         self._placeholder.setZValue(1.0)
@@ -280,6 +304,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 self._lines[name].setVisible(False)
 
             self._handles["origin"] = self._create_handle(DEFAULT_POSITIONS["origin"], "#ffd45c")
+            # Origin-only snap: runs after the shared _handle_moved slot, so a
+            # snap reposition lands on the already-updated label/lines.
+            self._handles["origin"].signals.moved.connect(self._snap_origin_if_enabled)
             self._handles["principal_point"] = self._create_handle(
                 DEFAULT_POSITIONS["principal_point"], "#ffffff"
             )
@@ -309,18 +336,24 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 self._handles[name].signals.pressed.connect(self._on_box_pressed)
                 self._handles[name].signals.released.connect(self._on_box_released)
             
-            # Create lines for the 2D user polygon (dashed)
+            # Create lines for the 2D user polygon (dashed). Each edge takes its
+            # axis-family colour (first=X red, second=Z blue, height=Y green) so
+            # the wireframe reads per axis; alpha is preserved from the prior
+            # neutral pens so the box stays subtle against the plate.
             for i, (v1, v2) in enumerate(BOX_EDGES):
                 name = f"box_edge_{i}"
-                pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 60), 1.0, QtCore.Qt.DashLine)
+                family_hex = AXIS_COLORS[BOX_FAMILY_WORLD_AXIS[i // 4]]
+                edge_color = QtGui.QColor(family_hex)
+                edge_color.setAlpha(60)
+                pen = QtGui.QPen(edge_color, 1.0, QtCore.Qt.DashLine)
                 pen.setCosmetic(True)
                 line = self._scene.addLine(QtCore.QLineF(), pen)
                 line.setZValue(1.5)
                 line.setVisible(False)
                 self._lines[name] = line
-                self._extension_lines[name] = self._make_extension_line(
-                    QtGui.QColor(255, 255, 255, 90)
-                )
+                ext_color = QtGui.QColor(family_hex)
+                ext_color.setAlpha(90)
+                self._extension_lines[name] = self._make_extension_line(ext_color)
 
             # Box origin-corner axis triad arrowheads (informational orientation
             # gizmo; Box mode resolves the actual sign internally).
@@ -675,6 +708,36 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._extend_btn.setStyleSheet(self._hud_style)
         self._extend_btn.clicked.connect(self.toggle_extend)
 
+        self._snap_btn = QtWidgets.QPushButton("Snap")
+        self._snap_btn.setCheckable(True)
+        self._snap_btn.setChecked(self._snap_enabled)
+        self._snap_btn.setToolTip(
+            "Snap the Scene Origin to nearby VP line ends and box corners "
+            "(within ~15px) while dragging it."
+        )
+        self._snap_btn.setStyleSheet(self._hud_style)
+        self._snap_btn.clicked.connect(self.toggle_snap)
+
+        self._dim_btn = QtWidgets.QPushButton("Dim")
+        self._dim_btn.setCheckable(True)
+        self._dim_btn.setChecked(self._dim_enabled)
+        self._dim_btn.setToolTip("Darken the plate so the overlay reads clearly on busy footage.")
+        self._dim_btn.setStyleSheet(self._hud_style)
+        self._dim_btn.clicked.connect(self.toggle_dim)
+
+        self._dim_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self._dim_slider.setRange(0, 100)
+        self._dim_slider.setValue(30)
+        self._dim_slider.setFixedWidth(80)
+        # A horizontal slider defaults to an Expanding size policy; left as-is it
+        # makes the whole HUD row report horizontal growth and AlignRight stops
+        # clustering the controls to the right. Pin it to Fixed.
+        self._dim_slider.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        self._dim_slider.setEnabled(self._dim_enabled)
+        self._dim_slider.setToolTip("Dim amount.")
+        self._dim_slider.setStyleSheet(self._hud_slider_style())
+        self._dim_slider.valueChanged.connect(self._update_dim)
+
         self._reset_btn = QtWidgets.QPushButton("Reset")
         self._reset_btn.setStyleSheet(self._hud_style)
         self._reset_btn.clicked.connect(self.reset_handles)
@@ -684,6 +747,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         hud_layout.addWidget(self._grid_btn)
         hud_layout.addWidget(self._horizon_btn)
         hud_layout.addWidget(self._extend_btn)
+        hud_layout.addWidget(self._snap_btn)
+        hud_layout.addWidget(self._dim_btn)
+        hud_layout.addWidget(self._dim_slider)
         hud_layout.addWidget(self._reset_btn)
 
     def toggle_grid(self) -> None:
@@ -709,6 +775,100 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         if self._extend_btn:
             self._extend_btn.setChecked(self._extend_visible)
         self._update_lines()
+
+    def toggle_snap(self) -> None:
+        """Toggle Origin-handle snapping to nearby VP ends and box corners."""
+        self._snap_enabled = not self._snap_enabled
+        if self._snap_btn:
+            self._snap_btn.setChecked(self._snap_enabled)
+
+    def toggle_dim(self) -> None:
+        """Toggle the plate-darkening overlay."""
+        self._dim_enabled = not self._dim_enabled
+        if self._dim_btn:
+            self._dim_btn.setChecked(self._dim_enabled)
+        if self._dim_slider:
+            self._dim_slider.setEnabled(self._dim_enabled)
+        self._update_dim()
+
+    def _update_dim(self) -> None:
+        """Refresh the dim overlay's size, alpha, and visibility from the slider."""
+        if self._dim_slider is None:
+            return
+        if not self._dim_enabled:
+            self._dim_rect.setVisible(False)
+            return
+        fraction = self._dim_slider.value() / 100.0
+        alpha = int(round(fraction * DIM_MAX_ALPHA * 255.0))
+        self._dim_rect.setRect(self._plate_rect)
+        self._dim_rect.setBrush(QtGui.QBrush(QtGui.QColor(0, 0, 0, alpha)))
+        self._dim_rect.setVisible(True)
+
+    def _collect_snap_targets(self) -> list[tuple[float, float]]:
+        """Scene positions of currently visible VP line ends and box corners."""
+        names = [
+            "vp1_a_start", "vp1_a_end", "vp1_b_start", "vp1_b_end",
+            "vp2_a_start", "vp2_a_end", "vp2_b_start", "vp2_b_end",
+            "vp3_a_start", "vp3_a_end", "vp3_b_start", "vp3_b_end",
+        ]
+        names.extend(BOX_CORNER_NAMES)
+        targets: list[tuple[float, float]] = []
+        for name in names:
+            handle = self._handles.get(name)
+            if handle is not None and handle.isVisible():
+                pos = handle.pos()
+                targets.append((pos.x(), pos.y()))
+        return targets
+
+    def _snap_origin_if_enabled(self) -> None:
+        """Pull the Origin onto the nearest target within the screen threshold."""
+        if self._is_internal_update or not self._snap_enabled:
+            return
+        targets = self._collect_snap_targets()
+        if not targets:
+            return
+        origin = self._handles["origin"]
+        pos = origin.pos()
+        # Handles ignore the view transform, so convert the screen-pixel
+        # threshold into scene units to keep the grab radius ~15px at any zoom.
+        scale = self.transform().m11()
+        threshold_scene = SNAP_THRESHOLD_PX / scale if scale else SNAP_THRESHOLD_PX
+        target = nearest_snap_target((pos.x(), pos.y()), targets, threshold_scene)
+        if target is None:
+            return
+        self._is_internal_update = True
+        try:
+            origin.setPos(target[0], target[1])
+        finally:
+            self._is_internal_update = False
+
+    def _hud_slider_style(self) -> str:
+        """Compact horizontal slider styled to match the HUD buttons."""
+        return """
+            QSlider {
+                min-height: 18px;
+            }
+            QSlider:disabled {
+                opacity: 0.4;
+            }
+            QSlider::groove:horizontal {
+                height: 4px;
+                background: rgba(45, 45, 45, 180);
+                border: 1px solid #555555;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                width: 10px;
+                margin: -5px 0;
+                background: #cccccc;
+                border: 1px solid #888888;
+                border-radius: 5px;
+            }
+            QSlider::sub-page:horizontal {
+                background: rgba(100, 150, 255, 150);
+                border-radius: 2px;
+            }
+        """
 
     def reset_handles(self) -> None:
         """Reset handles to defaults or undo the last reset."""
@@ -799,6 +959,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             # Keep Qt's scroll/layout extent tied to the plate. Items may still
             # draw and move through the visible canvas when the user zooms out.
             self._scene.setSceneRect(self._plate_rect)
+            self._dim_rect.setRect(self._plate_rect)
             self._refresh_canvas_rect()
             for name, handle in self._handles.items():
                 handle.set_plate_rect(self._plate_rect, self._canvas_rect)
