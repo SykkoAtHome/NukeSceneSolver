@@ -7,12 +7,11 @@ from PySide2 import QtCore, QtGui, QtWidgets
 from scene_solver.core import (
     BOX_CORNER_NAMES,
     BOX_EDGES,
-    GeometryError,
     SolveResult,
     box_axis_segments,
-    world_axis_index,
 )
 from scene_solver.core.models import Point2D, Segment2D
+from scene_solver.ui.axis_display import axis_arrow_heading, axis_color
 
 
 HANDLE_RADIUS = 8.0
@@ -26,7 +25,7 @@ def _clip_segment_to_rect(
     """Clip the finite segment start->end to ``rect`` (Liang-Barsky).
 
     Returns the retained sub-segment, or None if the segment lies wholly
-    outside the rectangle. Unlike _clip_infinite_line_to_plate this keeps the
+    outside the rectangle. Unlike _clip_infinite_line_to_canvas this keeps the
     segment's own extent rather than extending it to an infinite line.
     """
     x0, y0 = start.x(), start.y()
@@ -78,10 +77,10 @@ DEFAULT_POSITIONS = {
     "vp2_a_end": Point2D(0.25, 0.14),
     "vp2_b_start": Point2D(0.80, 0.80),
     "vp2_b_end": Point2D(0.61, 0.21),
-    "vp3_a_start": Point2D(0.5, 0.1),
-    "vp3_a_end": Point2D(0.5, 0.4),
-    "vp3_b_start": Point2D(0.4, 0.1),
-    "vp3_b_end": Point2D(0.4, 0.4),
+    "vp3_a_start": Point2D(0.5, 0.4),
+    "vp3_a_end": Point2D(0.5, 0.1),
+    "vp3_b_start": Point2D(0.4, 0.4),
+    "vp3_b_end": Point2D(0.4, 0.1),
     "origin": Point2D(0.5, 0.5),
     "principal_point": Point2D(0.5, 0.5),
     "reference_start": Point2D(0.50, 0.50),
@@ -110,10 +109,12 @@ class _HandleItem(QtWidgets.QGraphicsEllipseItem):
         relative_position: Point2D,
         color: QtGui.QColor,
         plate_rect: QtCore.QRectF,
+        movement_rect: QtCore.QRectF,
     ) -> None:
         super().__init__(-HANDLE_RADIUS, -HANDLE_RADIUS, HANDLE_RADIUS * 2.0, HANDLE_RADIUS * 2.0)
         self.signals = _HandleSignals()
         self._plate_rect = plate_rect
+        self._movement_rect = movement_rect
         self._color = color
         
         # Style: Transparent body, thin cosmetic outline
@@ -138,6 +139,14 @@ class _HandleItem(QtWidgets.QGraphicsEllipseItem):
         
         self.set_relative_position(relative_position)
 
+    def set_color(self, color: QtGui.QColor) -> None:
+        """Recolor the handle outline and centre dot."""
+        self._color = color
+        pen = QtGui.QPen(color, 1.5)
+        pen.setCosmetic(True)
+        self.setPen(pen)
+        self._dot.setBrush(QtGui.QBrush(color))
+
     def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:  # noqa: N802
         self.signals.pressed.emit()
         super().mousePressEvent(event)
@@ -146,10 +155,15 @@ class _HandleItem(QtWidgets.QGraphicsEllipseItem):
         self.signals.released.emit()
         super().mouseReleaseEvent(event)
 
-    def set_plate_rect(self, plate_rect: QtCore.QRectF) -> None:
+    def set_plate_rect(self, plate_rect: QtCore.QRectF, movement_rect: QtCore.QRectF) -> None:
         relative = self.relative_position()
         self._plate_rect = plate_rect
+        self._movement_rect = movement_rect
         self.set_relative_position(relative)
+
+    def set_movement_rect(self, movement_rect: QtCore.QRectF) -> None:
+        """Update the visible area that bounds interactive dragging."""
+        self._movement_rect = movement_rect
 
     def relative_position(self) -> Point2D:
         if self._plate_rect.width() == 0.0 or self._plate_rect.height() == 0.0:
@@ -169,8 +183,8 @@ class _HandleItem(QtWidgets.QGraphicsEllipseItem):
         if change == QtWidgets.QGraphicsItem.ItemPositionChange:
             point = value
             return QtCore.QPointF(
-                min(max(point.x(), self._plate_rect.left()), self._plate_rect.right()),
-                min(max(point.y(), self._plate_rect.top()), self._plate_rect.bottom()),
+                min(max(point.x(), self._movement_rect.left()), self._movement_rect.right()),
+                min(max(point.y(), self._movement_rect.top()), self._movement_rect.bottom()),
             )
         if change == QtWidgets.QGraphicsItem.ItemPositionHasChanged:
             self.signals.moved.emit()
@@ -195,6 +209,8 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._extend_visible = False
         self._reference_visible = False
         self._mode = "lines"
+        self._last_grid_result: SolveResult | None = None
+        self._last_grid_axes = ("X", "Z")
         self._undo_buffer: dict[str, Point2D] | None = None
         self._is_internal_update = False
         self._box_is_default = True
@@ -222,6 +238,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self.setDragMode(QtWidgets.QGraphicsView.NoDrag)
 
         self._plate_rect = QtCore.QRectF(0.0, 0.0, 1920.0, 1080.0)
+        self._canvas_rect = self._plate_rect
         self._plate_item = QtWidgets.QGraphicsPixmapItem()
         self._plate_item.setZValue(0.0)
         self._scene.addItem(self._plate_item)
@@ -409,18 +426,36 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             self._is_dragging_box = False
             self._box_is_default = False
 
-    def set_axis_labels(self, axis1: str, axis2: str, axis3: str = "+Y") -> None:
-        """Update labels to reflect assigned world axes."""
-        for name in ("vp1_a", "vp1_b"):
-            if name in self._labels:
-                self._labels[name].setText(f"{axis1.strip('+-')} Axis")
-        for name in ("vp2_a", "vp2_b"):
-            if name in self._labels:
-                self._labels[name].setText(f"{axis2.strip('+-')} Axis")
-        for name in ("vp3_a", "vp3_b"):
-            if name in self._labels:
-                self._labels[name].setText(f"{axis3.strip('+-')} Axis")
+    def set_axis_labels(self, axis1: str, axis2: str, axis3: str = "Y") -> None:
+        """Update labels and colours to reflect assigned world axes."""
+        for group, axis in (("vp1", axis1), ("vp2", axis2), ("vp3", axis3)):
+            for name in (f"{group}_a", f"{group}_b"):
+                if name in self._labels:
+                    self._labels[name].setText(f"{axis.strip('+-')} Axis")
+            self._recolor_group(group, axis_color(axis))
         self._update_lines()
+
+    def _recolor_group(self, group: str, color: str) -> None:
+        """Recolor every item of a VP group (lines, handles, label, arrow)."""
+        qcolor = QtGui.QColor(color)
+        for suffix in ("_a", "_b"):
+            name = f"{group}{suffix}"
+            if name in self._lines:
+                pen = self._lines[name].pen()
+                pen.setColor(qcolor)
+                self._lines[name].setPen(pen)
+            if name in self._extension_lines:
+                pen = self._extension_lines[name].pen()
+                pen.setColor(qcolor)
+                self._extension_lines[name].setPen(pen)
+            if name in self._arrows:
+                self._arrows[name].setBrush(QtGui.QBrush(qcolor))
+            if name in self._labels:
+                self._labels[name].setBrush(QtGui.QBrush(qcolor))
+            for end in ("_start", "_end"):
+                handle = self._handles.get(f"{name}{end}")
+                if handle is not None:
+                    handle.set_color(qcolor)
 
     def set_reference_visible(self, visible: bool) -> None:
         """Show reference-distance handles only while scale calibration is enabled."""
@@ -452,8 +487,13 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         finally:
             self._is_internal_update = False
 
-    def update_grid(self, result: SolveResult | None, axis1: str = "+X", axis2: str = "+Z") -> None:
+    def update_grid(self, result: SolveResult | None, axis1: str = "X", axis2: str = "Z") -> None:
         """Draw a perspective grid on the ground plane if the solve is valid."""
+        self._last_grid_result = result
+        self._last_grid_axes = (axis1, axis2)
+        self._refresh_canvas_rect()
+        self._update_lines()
+
         # Clear existing grid and box lines
         while self._grid_lines:
             self._scene.removeItem(self._grid_lines.pop())
@@ -537,23 +577,18 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             if start is None or end is None:
                 return
             # Projection diverges toward the near plane, so a clipped endpoint can
-            # land astronomically far away; bound the drawn span to a generous
-            # multiple of the plate to keep Qt's cosmetic pen well-conditioned.
-            margin = max(self._plate_rect.width(), self._plate_rect.height()) * 10.0
-            bounds = self._plate_rect.adjusted(-margin, -margin, margin, margin)
-            bounded = _clip_segment_to_rect(start, end, bounds)
+            # land astronomically far away; bound the drawn span to the visible
+            # canvas to keep Qt's cosmetic pen well-conditioned.
+            bounded = _clip_segment_to_rect(start, end, self._canvas_rect)
             if bounded is None:
                 return
             line = self._scene.addLine(QtCore.QLineF(*bounded), pen)
             line.setZValue(0.5)
             self._grid_lines.append(line)
 
-        # Map grid coords [u, v] to world [x, y, z] based on selected axes
-        try:
-            ax1_idx = world_axis_index(axis1)
-            ax2_idx = world_axis_index(axis2)
-        except GeometryError:
-            return
+        # The overlay is always Nuke's horizontal ground plane: X/Z. The VP
+        # dropdowns describe marked scene directions and may include world-up Y.
+        ax1_idx, ax2_idx = 0, 2
 
         steps = 10
         size = 5.0
@@ -694,11 +729,13 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
     def fit_view(self) -> None:
         """Fit the entire plate into the current view."""
         self.fitInView(self._plate_rect, QtCore.Qt.KeepAspectRatio)
+        self.update_grid(self._last_grid_result, *self._last_grid_axes)
 
     def reset_zoom(self) -> None:
         """Reset zoom to 1:1 pixel ratio."""
         self.resetTransform()
         self.centerOn(self._plate_rect.center())
+        self.update_grid(self._last_grid_result, *self._last_grid_axes)
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:  # noqa: N802 - Qt API name
         zoom_in_factor = 1.25
@@ -707,6 +744,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             self.scale(zoom_in_factor, zoom_in_factor)
         else:
             self.scale(zoom_out_factor, zoom_out_factor)
+        self.update_grid(self._last_grid_result, *self._last_grid_axes)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:  # noqa: N802 - Qt API name
         if event.button() == QtCore.Qt.MiddleButton:
@@ -727,13 +765,16 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 QtCore.Qt.LeftButton, event.modifiers()
             )
             super().mouseReleaseEvent(fake_event)
+            self.update_grid(self._last_grid_result, *self._last_grid_axes)
         else:
             super().mouseReleaseEvent(event)
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:  # noqa: N802 - Qt API name
         """Trigger line update on zoom/pan to keep handle-clipping accurate."""
         super().scrollContentsBy(dx, dy)
+        self._refresh_canvas_rect()
         self._update_lines()
+        self._update_horizon(self._last_grid_result)
 
     def set_plate(self, width: int, height: int, pixmap: QtGui.QPixmap | None = None) -> None:
         self._is_internal_update = True
@@ -742,9 +783,12 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 name: handle.relative_position() for name, handle in self._handles.items()
             }
             self._plate_rect = QtCore.QRectF(0.0, 0.0, float(width), float(height))
+            # Keep Qt's scroll/layout extent tied to the plate. Items may still
+            # draw and move through the visible canvas when the user zooms out.
             self._scene.setSceneRect(self._plate_rect)
+            self._refresh_canvas_rect()
             for name, handle in self._handles.items():
-                handle.set_plate_rect(self._plate_rect)
+                handle.set_plate_rect(self._plate_rect, self._canvas_rect)
                 handle.set_relative_position(relative_positions.get(name, Point2D(0.5, 0.5)))
             if pixmap is not None and not pixmap.isNull():
                 scaled = pixmap.scaled(
@@ -783,6 +827,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API name
         super().resizeEvent(event)
         self.fitInView(self._plate_rect, QtCore.Qt.KeepAspectRatio)
+        self.update_grid(self._last_grid_result, *self._last_grid_axes)
 
     def _create_segment(
         self,
@@ -798,9 +843,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._lines[name] = line
         self._extension_lines[name] = self._make_extension_line(QtGui.QColor(color))
 
-        # Direction arrowhead pointing start -> end, above the line but below the
-        # handles. Filled triangle, sized in scene units so it stays a constant
-        # size on screen regardless of zoom (see _set_arrow_head).
+        # Direction arrowhead above the line but below the handles. Filled
+        # triangle, sized in scene units so it stays a constant size on screen
+        # regardless of zoom (see _set_arrow_head).
         arrow = QtWidgets.QGraphicsPolygonItem()
         arrow.setBrush(QtGui.QBrush(QtGui.QColor(color)))
         arrow.setPen(QtCore.Qt.NoPen)
@@ -824,7 +869,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._handles[f"{name}_end"] = self._create_handle(end, color)
 
     def _create_handle(self, point: Point2D, color: str) -> _HandleItem:
-        handle = _HandleItem(point, QtGui.QColor(color), self._plate_rect)
+        handle = _HandleItem(point, QtGui.QColor(color), self._plate_rect, self._canvas_rect)
         handle.signals.moved.connect(self._handle_moved)
         self._scene.addItem(handle)
         return handle
@@ -850,14 +895,14 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         second: QtCore.QPointF,
         base_visible: bool,
     ) -> None:
-        """Update one line's dashed extension, clipped to the plate edges."""
+        """Update one dashed extension, clipped to the extended canvas edges."""
         item = self._extension_lines.get(name)
         if item is None:
             return
         if not (self._extend_visible and base_visible):
             item.setVisible(False)
             return
-        clipped = self._clip_infinite_line_to_plate(first, second)
+        clipped = self._clip_infinite_line_to_canvas(first, second)
         if clipped is None:
             item.setVisible(False)
             return
@@ -895,6 +940,23 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         barb2 = QtCore.QPointF(base_x - normal_x * half_width, base_y - normal_y * half_width)
         item.setPolygon(QtGui.QPolygonF([QtCore.QPointF(tip), barb1, barb2]))
         item.setVisible(True)
+
+    def _set_axis_arrow(
+        self,
+        name: str,
+        second_tip: QtCore.QPointF,
+        p1: QtCore.QPointF,
+        p2: QtCore.QPointF,
+        inv_scale: float,
+    ) -> None:
+        """Point the arrow from the line's start handle toward its end handle."""
+        start = Point2D(p1.x(), p1.y())
+        end = Point2D(p2.x(), p2.y())
+        heading = axis_arrow_heading(start, end)
+        if heading is None:
+            self._hide_arrow(name)
+            return
+        self._set_arrow_head(name, second_tip, heading.x, heading.y, 1.0, inv_scale)
 
     def _handle_moved(self) -> None:
         if not self._is_internal_update:
@@ -1044,7 +1106,10 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                     line.setLine(QtCore.QLineF(p1_offset, p2_offset))
                     line.setVisible(True)
                     visible = True
-                    self._set_arrow_head(name, p2_offset, dx, dy, length, inv_scale)
+                    if name.startswith("vp"):
+                        self._set_axis_arrow(name, p2_offset, p1, p2, inv_scale)
+                    else:
+                        self._set_arrow_head(name, p2_offset, dx, dy, length, inv_scale)
                 else:
                     line.setVisible(False)
             else:
@@ -1123,14 +1188,23 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             self._plate_rect.left() + second.x * width,
             self._plate_rect.top() + second.y * height,
         )
-        clipped = self._clip_infinite_line_to_plate(first_point, second_point)
+        clipped = self._clip_infinite_line_to_canvas(first_point, second_point)
         if clipped is None:
             self._horizon_line.setVisible(False)
             return
         self._horizon_line.setLine(QtCore.QLineF(*clipped))
         self._horizon_line.setVisible(self._horizon_visible)
 
-    def _clip_infinite_line_to_plate(
+    def _refresh_canvas_rect(self) -> None:
+        """Use the currently visible viewport as the overlay and drag boundary."""
+        canvas_rect = self.mapToScene(self.viewport().rect()).boundingRect()
+        if canvas_rect.width() <= 0.0 or canvas_rect.height() <= 0.0:
+            canvas_rect = self._plate_rect
+        self._canvas_rect = canvas_rect
+        for handle in getattr(self, "_handles", {}).values():
+            handle.set_movement_rect(canvas_rect)
+
+    def _clip_infinite_line_to_canvas(
         self,
         first: QtCore.QPointF,
         second: QtCore.QPointF,
@@ -1140,8 +1214,8 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         if abs(dx) < 1e-9 and abs(dy) < 1e-9:
             return None
 
-        left, right = self._plate_rect.left(), self._plate_rect.right()
-        top, bottom = self._plate_rect.top(), self._plate_rect.bottom()
+        left, right = self._canvas_rect.left(), self._canvas_rect.right()
+        top, bottom = self._canvas_rect.top(), self._canvas_rect.bottom()
         candidates: list[QtCore.QPointF] = []
 
         if abs(dx) >= 1e-9:

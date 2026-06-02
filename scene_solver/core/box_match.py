@@ -231,6 +231,7 @@ def _axis_oriented_by_segments(
 ) -> str:
     """Flip an axis when positive box edges run away from their vanishing point."""
 
+    signed_axis = axis if axis.startswith(("+", "-")) else f"+{normalized_world_axis_name(axis)}"
     score = 0.0
     for segment in segments:
         direction = segment.direction().normalized()
@@ -238,7 +239,7 @@ def _axis_oriented_by_segments(
         score += direction.dot(to_vanishing_point)
     if abs(score) <= DEFAULT_TOLERANCE:
         raise GeometryError("Could not resolve match-box axis direction.")
-    return axis if score > 0.0 else flipped_world_axis(axis)
+    return signed_axis if score > 0.0 else flipped_world_axis(signed_axis)
 
 
 def _is_reflected_below_nuke_ground_plane(result, solve_input) -> bool:

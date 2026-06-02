@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import atan, isfinite, sqrt
 
-from scene_solver.core.axes import flipped_world_axis, parse_world_axis
+from scene_solver.core.axes import missing_world_axis, normalized_world_axis_name, parse_world_axis
 from scene_solver.core.coordinates import (
     DEFAULT_PRINCIPAL_POINT,
     ImageDimensions,
@@ -55,15 +55,14 @@ class SolveInput:
     vp3_segments: tuple[Segment2D, ...] = ()
     principal_point: Point2D | None = None
     origin: Point2D = DEFAULT_PRINCIPAL_POINT
-    first_axis: str = "+X"
-    second_axis: str = "+Y"
-    third_axis: str = "+Z"
+    first_axis: str = "X"
+    second_axis: str = "Y"
+    third_axis: str = "Z"
     sensor_width_mm: float = DEFAULT_SENSOR_WIDTH_MM
     known_focal_length_mm: float | None = None
     camera_distance: float = DEFAULT_CAMERA_DISTANCE
     reference_distance: ReferenceDistanceInput | None = None
     mode: str = "2vp"
-    orient_axes_by_segments: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,11 +109,28 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
         dimensions = ImageDimensions(solve_input.image_width, solve_input.image_height)
         _validate_scalar("Sensor width", solve_input.sensor_width_mm)
         _validate_scalar("Camera distance", solve_input.camera_distance)
-        first_axis = parse_world_axis(solve_input.first_axis)
-        second_axis = parse_world_axis(solve_input.second_axis)
+        preserve_sign = solve_input.mode == "box"
+        first_axis_name = _solve_axis_name(solve_input.first_axis, preserve_sign=preserve_sign)
+        second_axis_name = _solve_axis_name(solve_input.second_axis, preserve_sign=preserve_sign)
+        first_axis = parse_world_axis(first_axis_name)
+        second_axis = parse_world_axis(second_axis_name)
 
         if solve_input.mode == "1vp":
             return _solve_1vp(solve_input, dimensions)
+
+        if first_axis[0] == second_axis[0]:
+            raise GeometryError("The two vanishing points must map to different world axes.")
+        if solve_input.mode == "3vp":
+            expected_third_axis = missing_world_axis(
+                first_axis_name,
+                second_axis_name,
+            )
+            third_axis_name = _solve_axis_name(solve_input.third_axis, preserve_sign=False)
+            if parse_world_axis(third_axis_name) != parse_world_axis(expected_third_axis):
+                raise GeometryError(
+                    f"The third VP axis must be {expected_third_axis.strip('+-')} "
+                    "for a right-handed Nuke coordinate system."
+                )
 
         if solve_input.principal_point is None:
             if solve_input.vp3_segments:
@@ -127,8 +143,6 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             else:
                 principal_point = DEFAULT_PRINCIPAL_POINT
 
-        if first_axis[0] == second_axis[0]:
-            raise GeometryError("The two vanishing points must map to different world axes.")
         first_vp_solver = _intersect_ui_segments(
             solve_input.vp1_segments,
             dimensions,
@@ -139,27 +153,27 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             dimensions,
             principal_point,
         )
-
-        if solve_input.orient_axes_by_segments:
-            first_axis, first_ambiguous = _orient_axis_by_segments(
-                solve_input.first_axis,
+        if solve_input.mode != "box":
+            _require_segments_point_toward_vp(
+                first_axis_name,
                 solve_input.vp1_segments,
                 solver_to_ui(first_vp_solver, dimensions, principal_point),
             )
-            second_axis, second_ambiguous = _orient_axis_by_segments(
-                solve_input.second_axis,
+            _require_segments_point_toward_vp(
+                second_axis_name,
                 solve_input.vp2_segments,
                 solver_to_ui(second_vp_solver, dimensions, principal_point),
             )
-            if first_ambiguous:
-                warnings.append(
-                    f"Arrow directions for the {solve_input.first_axis.strip('+-').upper()} "
-                    "axis are inconsistent; using the selected sign."
+            if solve_input.mode == "3vp":
+                third_vp_solver = _intersect_ui_segments(
+                    solve_input.vp3_segments,
+                    dimensions,
+                    principal_point,
                 )
-            if second_ambiguous:
-                warnings.append(
-                    f"Arrow directions for the {solve_input.second_axis.strip('+-').upper()} "
-                    "axis are inconsistent; using the selected sign."
+                _require_segments_point_toward_vp(
+                    third_axis_name,
+                    solve_input.vp3_segments,
+                    solver_to_ui(third_vp_solver, dimensions, principal_point),
                 )
 
         focal_plane_squared = -(
@@ -235,7 +249,13 @@ def _solve_1vp(solve_input: SolveInput, dimensions: ImageDimensions) -> SolveRes
     
     first_vp_solver = _intersect_ui_segments(solve_input.vp1_segments, dimensions, principal_point)
     first_camera_direction = solver_point_to_camera_ray(first_vp_solver, focal_plane_distance)
-    first_axis = parse_world_axis(solve_input.first_axis)
+    first_axis_name = _solve_axis_name(solve_input.first_axis, preserve_sign=False)
+    _require_segments_point_toward_vp(
+        first_axis_name,
+        solve_input.vp1_segments,
+        solver_to_ui(first_vp_solver, dimensions, principal_point),
+    )
+    first_axis = parse_world_axis(first_axis_name)
     
     # Use VP2 segments to fit a horizon line.
     if not solve_input.vp2_segments:
@@ -343,6 +363,33 @@ def _validate_scalar(name: str, value: float) -> None:
         raise GeometryError(f"{name} must be a finite positive value.")
 
 
+def _solve_axis_name(axis: str, *, preserve_sign: bool) -> str:
+    """Return a signed axis for internal solving from a UI axis selector."""
+    letter = normalized_world_axis_name(axis)
+    if preserve_sign and axis.startswith("-"):
+        return f"-{letter}"
+    return f"+{letter}"
+
+
+def _require_segments_point_toward_vp(
+    axis: str,
+    segments: tuple[Segment2D, ...],
+    vanishing_point: Point2D,
+) -> None:
+    """Require each directed VP line to point toward its shared vanishing point."""
+    letter = normalized_world_axis_name(axis)
+    for segment in segments:
+        try:
+            direction = segment.direction().normalized()
+            to_vanishing_point = (vanishing_point - segment.start).normalized()
+        except GeometryError as error:
+            raise GeometryError(f"The {letter} VP lines must have a visible direction.") from error
+        if direction.dot(to_vanishing_point) <= DEFAULT_TOLERANCE:
+            raise GeometryError(
+                f"The {letter} VP lines must point toward their vanishing point."
+            )
+
+
 def _intersect_ui_segments(
     segments: tuple[Segment2D, ...],
     dimensions: ImageDimensions,
@@ -363,57 +410,6 @@ def _ui_segment_to_solver(
         ui_to_solver(segment.start, dimensions, principal_point),
         ui_to_solver(segment.end, dimensions, principal_point),
     )
-
-
-# A vote is cos(angle) between a segment's drawn direction and the direction to
-# its vanishing point: ~+1 points toward the VP, ~-1 away. Beyond this magnitude
-# (~60 degrees) the arrow's intent is unambiguous, so opposing confident votes
-# mean the marking truly contradicts itself.
-_AXIS_VOTE_CONFIDENCE = 0.5
-
-
-def _orient_axis_by_segments(
-    axis: str,
-    segments: tuple[Segment2D, ...],
-    vanishing_point_ui: Point2D,
-) -> tuple[tuple[int, float], bool]:
-    """Resolve an axis sign from drawn segment directions.
-
-    A segment whose drawn direction (start -> end) points toward its vanishing
-    point runs along the positive world axis; one pointing away runs along the
-    negative axis. Summing ``direction . to_vanishing_point`` over the group
-    yields a signed score. Returns the parsed (index, sign) axis and whether the
-    direction was ambiguous, so the caller can warn and fall back to the user's
-    selected sign. The dot-product sign is invariant under the UI y-flip, so
-    UI-space inputs are fine here.
-
-    Ambiguity is judged per segment, not from the summed score: two confident
-    but opposing arrows nearly cancel (e.g. +0.999 and -0.999) yet leave a tiny
-    non-zero residual that a sum-only test would treat as a clear winner. When
-    both a confidently-positive and a confidently-negative vote are present the
-    drawing is genuinely contradictory, so we flag it ambiguous rather than
-    silently siding with whichever arrow had marginally less marking noise.
-    """
-
-    votes = []
-    for segment in segments:
-        try:
-            direction = segment.direction().normalized()
-            to_vanishing_point = (vanishing_point_ui - segment.start).normalized()
-        except GeometryError:
-            continue
-        votes.append(direction.dot(to_vanishing_point))
-    if not votes:
-        return parse_world_axis(axis), True
-    has_positive = any(vote > _AXIS_VOTE_CONFIDENCE for vote in votes)
-    has_negative = any(vote < -_AXIS_VOTE_CONFIDENCE for vote in votes)
-    if has_positive and has_negative:
-        return parse_world_axis(axis), True
-    score = sum(votes)
-    if abs(score) <= DEFAULT_TOLERANCE:
-        return parse_world_axis(axis), True
-    chosen = axis if score > 0.0 else flipped_world_axis(axis)
-    return parse_world_axis(chosen), False
 
 
 def _world_to_camera_columns(

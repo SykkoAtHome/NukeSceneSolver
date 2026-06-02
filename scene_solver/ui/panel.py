@@ -36,10 +36,11 @@ from scene_solver.nuke_integration import (
     save_state,
     update_camera,
 )
+from scene_solver.ui.axis_display import axis_letter
 from scene_solver.ui.canvas import SceneSolverCanvas
 
 
-AXES = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
+AXES = ("X", "Y", "Z")
 ARBITRARY_SCALE_MODE = "Arbitrary camera distance"
 BOX_DIMENSION_SCALE_MODE = "Estimated match-box dimension"
 
@@ -100,13 +101,13 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._vp2_enable.setChecked(True)
         self._second_axis = QtWidgets.QComboBox()
         self._second_axis.addItems(AXES)
-        self._second_axis.setCurrentText("+Z")
+        self._second_axis.setCurrentText("Z")
         
         self._vp3_enable = QtWidgets.QCheckBox("Third VP axis")
         self._vp3_enable.setChecked(False)
         self._third_axis = QtWidgets.QComboBox()
         self._third_axis.addItems(AXES)
-        self._third_axis.setCurrentText("+Y")
+        self._third_axis.setCurrentText("Y")
         
         self._auto_pp = QtWidgets.QCheckBox("Auto Principal Point (3VP only)")
         self._auto_pp.setChecked(True)
@@ -152,7 +153,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._match_box_base_offset.setValue(0.0)
         self._match_box_base_offset.setToolTip(
             "Coordinate of the match-box base plane along the derived third axis. "
-            "For the default +X/+Z ground axes this is the base Y coordinate."
+            "For the default X/Z ground axes this is the base Y coordinate."
         )
         
         self._vp_axes_row = QtWidgets.QWidget()
@@ -477,10 +478,6 @@ class SceneSolverPanel(QtWidgets.QWidget):
             known_focal_length_mm=self._focal_length.value() if mode_str == "1vp" else None,
             camera_distance=effective_distance,
             mode=mode_str,
-            # In VP mode the drawn arrow directions resolve each axis sign (and
-            # the mirror ambiguity). Box mode runs its own orientation plus an
-            # above-ground correction, so it must not be re-oriented here.
-            orient_axes_by_segments=(mode_str != "box"),
         )
         scale_error = None
         if mode == "box":
@@ -596,11 +593,11 @@ class SceneSolverPanel(QtWidgets.QWidget):
                     self._vp3_enable.setChecked(True)
 
             if "first_axis" in state:
-                self._first_axis.setCurrentText(state["first_axis"])
+                self._first_axis.setCurrentText(axis_letter(state["first_axis"]))
             if "second_axis" in state:
-                self._second_axis.setCurrentText(state["second_axis"])
+                self._second_axis.setCurrentText(axis_letter(state["second_axis"]))
             if "third_axis" in state:
-                self._third_axis.setCurrentText(state["third_axis"])
+                self._third_axis.setCurrentText(axis_letter(state["third_axis"]))
             if "auto_pp" in state:
                 self._auto_pp.setChecked(state["auto_pp"])
             if "use_pp_offset" in state:
