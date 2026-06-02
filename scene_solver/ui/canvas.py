@@ -17,6 +17,50 @@ from scene_solver.core.models import Point2D, Segment2D
 
 HANDLE_RADIUS = 8.0
 
+
+def _clip_segment_to_rect(
+    start: QtCore.QPointF,
+    end: QtCore.QPointF,
+    rect: QtCore.QRectF,
+) -> tuple[QtCore.QPointF, QtCore.QPointF] | None:
+    """Clip the finite segment start->end to ``rect`` (Liang-Barsky).
+
+    Returns the retained sub-segment, or None if the segment lies wholly
+    outside the rectangle. Unlike _clip_infinite_line_to_plate this keeps the
+    segment's own extent rather than extending it to an infinite line.
+    """
+    x0, y0 = start.x(), start.y()
+    dx, dy = end.x() - x0, end.y() - y0
+    edges = (-dx, dx, -dy, dy)
+    distances = (
+        x0 - rect.left(),
+        rect.right() - x0,
+        y0 - rect.top(),
+        rect.bottom() - y0,
+    )
+    enter, leave = 0.0, 1.0
+    for edge, distance in zip(edges, distances):
+        if abs(edge) < 1e-12:
+            if distance < 0.0:
+                return None  # parallel to this edge and outside it
+            continue
+        crossing = distance / edge
+        if edge < 0.0:
+            if crossing > leave:
+                return None
+            enter = max(enter, crossing)
+        else:
+            if crossing < enter:
+                return None
+            leave = min(leave, crossing)
+    if enter > leave:
+        return None
+    return (
+        QtCore.QPointF(x0 + enter * dx, y0 + enter * dy),
+        QtCore.QPointF(x0 + leave * dx, y0 + leave * dy),
+    )
+
+
 # Axis-direction triad drawn from the box origin corner in Box mode:
 # (arrow key, origin corner, destination corner, color matching the dest corner).
 BOX_TRIAD = (
@@ -454,6 +498,56 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         pen = QtGui.QPen(QtGui.QColor(255, 255, 255, 80), 1.0)
         pen.setCosmetic(True)
 
+        # Strictly in front of project()'s cull plane (-1e-6) so a clipped
+        # endpoint still projects (its z stays clear of zero).
+        near_plane_z = -1e-4
+
+        def camera_z(point: tuple[float, float, float]) -> float:
+            row = proj.rows[3]
+            return row[0] * point[0] + row[1] * point[1] + row[2] * point[2] + row[3]
+
+        def near_clip(first, second):
+            """Clip world segment first->second to the half-space in front of the camera.
+
+            A grid line straddling the camera plane would otherwise vanish
+            entirely: project() culls the behind endpoint and add_grid_line drops
+            any segment missing an endpoint. Cutting it at the near plane keeps
+            the visible front portion instead of losing the whole line.
+            """
+            z1, z2 = camera_z(first), camera_z(second)
+            first_front, second_front = z1 < near_plane_z, z2 < near_plane_z
+            if not first_front and not second_front:
+                return None
+            if first_front and second_front:
+                return first, second
+            ratio = (near_plane_z - z1) / (z2 - z1)
+            crossing = (
+                first[0] + ratio * (second[0] - first[0]),
+                first[1] + ratio * (second[1] - first[1]),
+                first[2] + ratio * (second[2] - first[2]),
+            )
+            return (first, crossing) if first_front else (crossing, second)
+
+        def add_grid_line(first, second) -> None:
+            clipped = near_clip(first, second)
+            if clipped is None:
+                return
+            start = project(*clipped[0])
+            end = project(*clipped[1])
+            if start is None or end is None:
+                return
+            # Projection diverges toward the near plane, so a clipped endpoint can
+            # land astronomically far away; bound the drawn span to a generous
+            # multiple of the plate to keep Qt's cosmetic pen well-conditioned.
+            margin = max(self._plate_rect.width(), self._plate_rect.height()) * 10.0
+            bounds = self._plate_rect.adjusted(-margin, -margin, margin, margin)
+            bounded = _clip_segment_to_rect(start, end, bounds)
+            if bounded is None:
+                return
+            line = self._scene.addLine(QtCore.QLineF(*bounded), pen)
+            line.setZValue(0.5)
+            self._grid_lines.append(line)
+
         # Map grid coords [u, v] to world [x, y, z] based on selected axes
         try:
             ax1_idx = world_axis_index(axis1)
@@ -469,20 +563,12 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             p3s, p3e = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
             p3s[ax1_idx] = val; p3s[ax2_idx] = -size
             p3e[ax1_idx] = val; p3e[ax2_idx] = size
-            ps, pe = project(*p3s), project(*p3e)
-            if ps and pe:
-                line = self._scene.addLine(QtCore.QLineF(ps, pe), pen)
-                line.setZValue(0.5)
-                self._grid_lines.append(line)
+            add_grid_line(p3s, p3e)
             # Lines along ax2
             p3s, p3e = [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]
             p3s[ax2_idx] = val; p3s[ax1_idx] = -size
             p3e[ax2_idx] = val; p3e[ax1_idx] = size
-            ps, pe = project(*p3s), project(*p3e)
-            if ps and pe:
-                line = self._scene.addLine(QtCore.QLineF(ps, pe), pen)
-                line.setZValue(0.5)
-                self._grid_lines.append(line)
+            add_grid_line(p3s, p3e)
 
     def _setup_hud(self) -> None:
         """Create floating HUD buttons."""

@@ -413,6 +413,21 @@ class SceneSolverPanel(QtWidgets.QWidget):
     def _on_refresh_timeout(self) -> None:
         self._refresh_solution(full=True)
 
+    def _flush_pending_refresh(self) -> None:
+        """Run any debounced full refresh now instead of waiting for the timer.
+
+        The cheap live path defers the heavy solve and the Nuke state write to
+        the debounce timeout. If the panel is closed inside that window the
+        timer is destroyed and the last edit would never be persisted, leaving
+        the saved knob (and the cached scale calibration) stale. Flush on close.
+        """
+        if self._refresh_timer.isActive():
+            self._refresh_solution(full=True)
+
+    def closeEvent(self, event) -> None:
+        self._flush_pending_refresh()
+        super().closeEvent(event)
+
     def _refresh_solution(self, *args, full: bool = True) -> SolveResult:
         if full:
             # A synchronous full refresh supersedes any pending debounced one.

@@ -365,6 +365,13 @@ def _ui_segment_to_solver(
     )
 
 
+# A vote is cos(angle) between a segment's drawn direction and the direction to
+# its vanishing point: ~+1 points toward the VP, ~-1 away. Beyond this magnitude
+# (~60 degrees) the arrow's intent is unambiguous, so opposing confident votes
+# mean the marking truly contradicts itself.
+_AXIS_VOTE_CONFIDENCE = 0.5
+
+
 def _orient_axis_by_segments(
     axis: str,
     segments: tuple[Segment2D, ...],
@@ -376,19 +383,33 @@ def _orient_axis_by_segments(
     point runs along the positive world axis; one pointing away runs along the
     negative axis. Summing ``direction . to_vanishing_point`` over the group
     yields a signed score. Returns the parsed (index, sign) axis and whether the
-    direction was ambiguous (segments cancelling out), so the caller can warn
-    and fall back to the user's selected sign. The dot-product sign is invariant
-    under the UI y-flip, so UI-space inputs are fine here.
+    direction was ambiguous, so the caller can warn and fall back to the user's
+    selected sign. The dot-product sign is invariant under the UI y-flip, so
+    UI-space inputs are fine here.
+
+    Ambiguity is judged per segment, not from the summed score: two confident
+    but opposing arrows nearly cancel (e.g. +0.999 and -0.999) yet leave a tiny
+    non-zero residual that a sum-only test would treat as a clear winner. When
+    both a confidently-positive and a confidently-negative vote are present the
+    drawing is genuinely contradictory, so we flag it ambiguous rather than
+    silently siding with whichever arrow had marginally less marking noise.
     """
 
-    score = 0.0
+    votes = []
     for segment in segments:
         try:
             direction = segment.direction().normalized()
             to_vanishing_point = (vanishing_point_ui - segment.start).normalized()
         except GeometryError:
             continue
-        score += direction.dot(to_vanishing_point)
+        votes.append(direction.dot(to_vanishing_point))
+    if not votes:
+        return parse_world_axis(axis), True
+    has_positive = any(vote > _AXIS_VOTE_CONFIDENCE for vote in votes)
+    has_negative = any(vote < -_AXIS_VOTE_CONFIDENCE for vote in votes)
+    if has_positive and has_negative:
+        return parse_world_axis(axis), True
+    score = sum(votes)
     if abs(score) <= DEFAULT_TOLERANCE:
         return parse_world_axis(axis), True
     chosen = axis if score > 0.0 else flipped_world_axis(axis)

@@ -16,7 +16,13 @@ def save_state(state_dict: dict[str, Any], *, nuke_module: Any | None = None) ->
     a separate entry onto Nuke's undo stack, burying the user's real history.
     """
     nuke = nuke_module or _import_nuke()
-    undo = getattr(nuke, "Undo", None)
+    # ``nuke.Undo`` is a class whose disable()/enable() are instance methods, so
+    # it must be instantiated before use (Foundry's own panels do the same).
+    # Calling them on the bare class raises "missing 1 required positional
+    # argument: 'self'" and would break panel startup on the first save. A fake
+    # nuke that already exposes an Undo instance is used as-is.
+    undo_attr = getattr(nuke, "Undo", None)
+    undo = undo_attr() if isinstance(undo_attr, type) else undo_attr
     if undo is not None:
         undo.disable()
     try:
