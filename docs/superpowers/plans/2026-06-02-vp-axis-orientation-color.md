@@ -4,7 +4,7 @@
 
 **Goal:** In Vanishing-Point mode, make the signed axis dropdown the single source of truth for axis direction, turn the VP-line arrows into a passive +axis readout, and color each VP group by its world-axis letter (Nuke gizmo convention) reactively.
 
-**Architecture:** Pure, Qt-free helpers (`scene_solver/ui/axis_display.py`) own the colour rule and the arrow heading rule so they are unit-testable without Qt. `canvas.py` consumes them. The arrow-driven sign orientation is removed from `solver_2vp.py`, so the dropdown sign flows straight into the solve.
+**Architecture:** Pure, Qt-free helpers (`scene_solver/ui/axis_display.py`) own the colour rule and the arrow heading rule so they are unit-testable without Qt. `canvas.py` consumes them. The arrow-driven sign orientation is removed from `solver_2vp.py`, so the dropdown sign flows straight into the solve. In 3VP mode, the third signed dropdown remains editable but is validated against the right-handed Nuke axis implied by the first two dropdowns; the default `+X / +Z / +Y` mapping therefore makes the Y arrow a world-up readout.
 
 **Tech Stack:** Python 3, PySide2 (Qt) for the panel/canvas, pytest for the pure helpers. Note: PySide2 is NOT installed in the dev shell, so canvas/panel changes are verified by `compileall` + manual test in Nuke; only the Qt-free helpers and the solver get automated tests.
 
@@ -16,8 +16,8 @@
 
 - **Create** `scene_solver/ui/axis_display.py` — Qt-free helpers: `AXIS_COLORS`, `axis_color()`, `axis_arrow_heading()`. One responsibility: the rules that map an axis string to a colour and a VP line to its +axis arrow.
 - **Create** `tests/test_axis_display.py` — unit tests for the helpers.
-- **Create** `tests/test_solver_2vp_sign.py` — regression test: solve ignores drawn segment direction.
-- **Modify** `scene_solver/core/solver_2vp.py` — remove arrow-driven orientation (field, function, constant, warnings, unused import).
+- **Create** `tests/test_solver_2vp_sign.py` — regression tests: solve ignores drawn segment direction, respects dropdown sign, and rejects an inconsistent 3VP Nuke frame.
+- **Modify** `scene_solver/core/solver_2vp.py` — remove arrow-driven orientation (field, function, constant, warnings, unused import); validate the 3VP signed-axis assignment as a right-handed Nuke frame.
 - **Modify** `scene_solver/ui/panel.py` — stop passing `orient_axes_by_segments`; the axis dropdowns already drive `set_axis_labels`, which now also recolors.
 - **Modify** `scene_solver/ui/canvas.py` — `_HandleItem.set_color`; per-group recolor; arrow readout driven by stored VP + sign instead of drawn direction.
 
@@ -54,31 +54,51 @@ def test_positive_arrow_points_toward_vp_on_near_end():
     # Line 0->10 on x; VP far to the right. +axis runs toward the VP.
     start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
     vp = Point2D(100.0, 0.0)
-    base, heading = axis_arrow_heading(start, end, vp, positive=True)
-    assert base == end
+    heading = axis_arrow_heading(start, end, vp, positive=True)
     assert heading.x > 0.9 and abs(heading.y) < 1e-9
 
 
 def test_negative_arrow_points_away_from_vp_on_far_end():
     start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
     vp = Point2D(100.0, 0.0)
-    base, heading = axis_arrow_heading(start, end, vp, positive=False)
-    assert base == start
+    heading = axis_arrow_heading(start, end, vp, positive=False)
     assert heading.x < -0.9 and abs(heading.y) < 1e-9
 
 
 def test_heading_follows_vp_on_the_other_side():
-    # VP to the LEFT: +axis runs left, so positive arrow sits on the start end.
+    # VP to the LEFT: +axis runs left.
     start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
     vp = Point2D(-100.0, 0.0)
-    base, heading = axis_arrow_heading(start, end, vp, positive=True)
-    assert base == start
+    heading = axis_arrow_heading(start, end, vp, positive=True)
     assert heading.x < -0.9
 
 
 def test_degenerate_zero_length_line_returns_none():
     p = Point2D(5.0, 5.0)
     assert axis_arrow_heading(p, p, Point2D(9.0, 9.0), positive=True) is None
+
+
+def test_positive_arrow_points_toward_vp_when_line_straddles_it():
+    start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
+    heading = axis_arrow_heading(start, end, Point2D(4.0, 0.0), positive=True)
+    assert heading.x < -0.9
+
+
+def test_negative_arrow_points_away_from_vp_when_line_straddles_it():
+    start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
+    heading = axis_arrow_heading(start, end, Point2D(4.0, 0.0), positive=False)
+    assert heading.x > 0.9
+
+
+def test_positive_arrow_keeps_heading_when_vp_is_on_endpoint():
+    start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
+    heading = axis_arrow_heading(start, end, end, positive=True)
+    assert heading.x > 0.9
+
+
+def test_vp_at_line_midpoint_has_no_unique_heading():
+    start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
+    assert axis_arrow_heading(start, end, Point2D(5.0, 0.0), positive=True) is None
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -117,34 +137,31 @@ def axis_arrow_heading(
     end: Point2D,
     vanishing_point: Point2D,
     positive: bool,
-) -> tuple[Point2D, Vector2D] | None:
+) -> Vector2D | None:
     """Resolve a +axis readout arrow for one VP line.
 
     All points are in scene coordinates. Moving along the +axis moves the image
-    point toward the vanishing point, so for ``positive`` the arrow sits on the
-    toward-VP endpoint pointing at the VP; for a negative sign it sits on the
-    other endpoint pointing away. Returns ``(base, heading_unit)`` or None when
-    the line is degenerate (zero length).
+    point toward the vanishing point. Returns the line-aligned unit heading whose
+    direction points toward the VP for ``positive`` and away from it otherwise.
+    The handle order has no meaning. Returns None when the line or heading is
+    degenerate.
     """
     direction = end - start
     if direction.length() <= 1e-9:
         return None
     unit = direction.normalized()
-    heads_to_end = unit.dot(vanishing_point - end) >= 0.0
-    if heads_to_end:
-        toward_base, toward_heading = end, unit
-    else:
-        toward_base, toward_heading = start, Vector2D(-unit.x, -unit.y)
-    if positive:
-        return toward_base, toward_heading
-    away_base = start if heads_to_end else end
-    return away_base, Vector2D(-toward_heading.x, -toward_heading.y)
+    midpoint = Point2D((start.x + end.x) * 0.5, (start.y + end.y) * 0.5)
+    toward_score = unit.dot(vanishing_point - midpoint)
+    if abs(toward_score) <= 1e-9:
+        return None
+    heading = unit if toward_score > 0.0 else Vector2D(-unit.x, -unit.y)
+    return heading if positive else Vector2D(-heading.x, -heading.y)
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m pytest tests/test_axis_display.py -q`
-Expected: PASS (5 passed)
+Expected: PASS (9 passed)
 
 - [ ] **Step 5: Commit**
 
@@ -203,15 +220,34 @@ def test_reversing_drawn_direction_does_not_change_solve():
     assert forward.camera_position == flipped.camera_position
 
 
+def test_changing_dropdown_sign_changes_camera_orientation():
+    vp1 = (_segment(0.10, 0.40, 0.50, 0.45), _segment(0.10, 0.60, 0.50, 0.55))
+    vp2 = (_segment(0.90, 0.40, 0.50, 0.45), _segment(0.90, 0.60, 0.50, 0.55))
+    positive = solve_2vp(_base_input(vp1, vp2))
+    negative = solve_2vp(dataclasses.replace(_base_input(vp1, vp2), first_axis="-X"))
+    assert positive.ok and negative.ok
+    assert positive.camera_to_world_matrix != negative.camera_to_world_matrix
+
+
+def test_3vp_rejects_third_axis_that_breaks_nuke_right_handed_frame():
+    vp1 = (_segment(0.10, 0.40, 0.50, 0.45), _segment(0.10, 0.60, 0.50, 0.55))
+    vp2 = (_segment(0.90, 0.40, 0.50, 0.45), _segment(0.90, 0.60, 0.50, 0.55))
+    result = solve_2vp(dataclasses.replace(_base_input(vp1, vp2), mode="3vp", third_axis="-Y"))
+    assert not result.ok
+    assert result.errors == (
+        "The third VP axis must be +Y for a right-handed Nuke coordinate system.",
+    )
+
+
 def test_solve_input_has_no_orient_axes_field():
     names = {f.name for f in dataclasses.fields(SolveInput)}
     assert "orient_axes_by_segments" not in names
 ```
 
-- [ ] **Step 2: Run tests to verify the second one fails**
+- [ ] **Step 2: Run tests to verify the expected regressions fail**
 
 Run: `python -m pytest tests/test_solver_2vp_sign.py -q`
-Expected: `test_solve_input_has_no_orient_axes_field` FAILS (field still present); the reversal test already passes.
+Expected: `test_solve_input_has_no_orient_axes_field` and the new 3VP validation test FAIL; the reversal and dropdown-sign tests already pass.
 
 - [ ] **Step 3: Remove the orientation field from `SolveInput`**
 
@@ -254,7 +290,7 @@ In `scene_solver/core/solver_2vp.py`, delete the whole block (it sits between th
 
 In `scene_solver/core/solver_2vp.py`, delete the constant `_AXIS_VOTE_CONFIDENCE` (with its comment) and the entire `_orient_axis_by_segments(...)` function (from its `# A vote is cos(angle)...` comment block through `return parse_world_axis(chosen), False`).
 
-- [ ] **Step 6: Drop the now-unused import**
+- [ ] **Step 6: Replace the now-unused import and validate the 3VP Nuke frame**
 
 In `scene_solver/core/solver_2vp.py`, change:
 
@@ -265,10 +301,36 @@ from scene_solver.core.axes import flipped_world_axis, parse_world_axis
 to:
 
 ```python
-from scene_solver.core.axes import parse_world_axis
+from scene_solver.core.axes import missing_world_axis, parse_world_axis
 ```
 
-(Leave `parse_world_axis`; it is still used. `flipped_world_axis` is only used by `box_match.py`, which has its own import.)
+(`flipped_world_axis` is only used by `box_match.py`, which has its own import.)
+
+Immediately after the existing different-axis check:
+
+```python
+        if first_axis[0] == second_axis[0]:
+            raise GeometryError("The two vanishing points must map to different world axes.")
+```
+
+add:
+
+```python
+        if solve_input.mode == "3vp":
+            expected_third_axis = missing_world_axis(
+                solve_input.first_axis,
+                solve_input.second_axis,
+            )
+            if parse_world_axis(solve_input.third_axis) != parse_world_axis(expected_third_axis):
+                raise GeometryError(
+                    f"The third VP axis must be {expected_third_axis} "
+                    "for a right-handed Nuke coordinate system."
+                )
+```
+
+The dropdown remains editable. Invalid 3VP assignments fail visibly and do not
+draw a misleading solved arrow. The default `+X / +Z / +Y` assignment is valid
+and makes `+Y` the world-up readout.
 
 - [ ] **Step 7: Stop passing the kwarg from the panel**
 
@@ -288,7 +350,7 @@ Run:
 python -m pytest tests/test_solver_2vp_sign.py tests/test_geometry_determinant.py -q
 python -m compileall -q scene_solver
 ```
-Expected: tests PASS (4 passed), compile prints nothing (success).
+Expected: tests PASS (13 passed), compile prints nothing (success).
 
 - [ ] **Step 9: Commit**
 
@@ -467,8 +529,8 @@ In `scene_solver/ui/canvas.py`, in `_update_lines`, find the VP-line block that 
             if length > HANDLE_RADIUS * 2.0:
                 inv_scale = 1.0 / self.transform().m11()
                 scene_offset = HANDLE_RADIUS * inv_scale
-                ratio = scene_offset / length
-                if ratio < 0.5:
+                if length > scene_offset * 2.0:
+                    ratio = scene_offset / length
                     p1_offset = QtCore.QPointF(p1.x() + dx * ratio, p1.y() + dy * ratio)
                     p2_offset = QtCore.QPointF(p2.x() - dx * ratio, p2.y() - dy * ratio)
                     line.setLine(QtCore.QLineF(p1_offset, p2_offset))
@@ -491,14 +553,14 @@ Replace it with (the only change is the arrow call: it now uses the +axis readou
             if length > HANDLE_RADIUS * 2.0:
                 inv_scale = 1.0 / self.transform().m11()
                 scene_offset = HANDLE_RADIUS * inv_scale
-                ratio = scene_offset / length
-                if ratio < 0.5:
+                if length > scene_offset * 2.0:
+                    ratio = scene_offset / length
                     p1_offset = QtCore.QPointF(p1.x() + dx * ratio, p1.y() + dy * ratio)
                     p2_offset = QtCore.QPointF(p2.x() - dx * ratio, p2.y() - dy * ratio)
                     line.setLine(QtCore.QLineF(p1_offset, p2_offset))
                     line.setVisible(True)
                     visible = True
-                    self._set_axis_arrow(name, p1, p2, scene_offset, inv_scale)
+                    self._set_axis_arrow(name, p2_offset, p1, p2, inv_scale)
                 else:
                     line.setVisible(False)
             else:
@@ -516,9 +578,9 @@ In `scene_solver/ui/canvas.py`, add this method to `SceneSolverCanvas`:
     def _set_axis_arrow(
         self,
         name: str,
+        tip: QtCore.QPointF,
         p1: QtCore.QPointF,
         p2: QtCore.QPointF,
-        scene_offset: float,
         inv_scale: float,
     ) -> None:
         """Point the arrow along the +axis (toward VP for '+', away for '-')."""
@@ -529,21 +591,13 @@ In `scene_solver/ui/canvas.py`, add this method to `SceneSolverCanvas`:
             self._hide_arrow(name)
             return
         positive = not self._axes[index].startswith("-")
-        heading = axis_arrow_heading(
-            Point2D(p1.x(), p1.y()),
-            Point2D(p2.x(), p2.y()),
-            vp,
-            positive,
-        )
+        start = Point2D(p1.x(), p1.y())
+        end = Point2D(p2.x(), p2.y())
+        heading = axis_arrow_heading(start, end, vp, positive)
         if heading is None:
             self._hide_arrow(name)
             return
-        base, direction = heading
-        tip = QtCore.QPointF(
-            base.x - direction.x * scene_offset,
-            base.y - direction.y * scene_offset,
-        )
-        self._set_arrow_head(name, tip, direction.x, direction.y, 1.0, inv_scale)
+        self._set_arrow_head(name, tip, heading.x, heading.y, 1.0, inv_scale)
 ```
 
 - [ ] **Step 5: Compile**
@@ -577,8 +631,9 @@ git commit -m "Drive VP arrows as a passive +axis readout from VP and sign"
 - [ ] **Step 2: Color follows letter** — change `first_axis` from `+X` to `+Y`; the vp1 line, its handles, label, and arrow turn green. Set it back to `+X`; it returns to red.
 - [ ] **Step 3: Arrow is a +axis readout** — flip `+X` ↔ `-X`; the vp1 arrow flips direction (toward vs away from its vanishing point) without redrawing the line.
 - [ ] **Step 4: Default +Y points up** — enable the third VP axis (default `+Y`); its arrow points toward the Y vanishing point (up under vertical convergence), matching Nuke's +Y.
-- [ ] **Step 5: Arrows don't affect the solve** — drag a vp line so its drawn start→end reverses; the focal length / camera readout is unchanged (only the dropdown sign matters).
-- [ ] **Step 6: Box mode unaffected** — switch to Box Match; the triad arrows and box solve behave exactly as before.
+- [ ] **Step 5: Invalid 3VP frame is rejected** — with `+X / +Z`, set the third dropdown to `-Y`; the solve reports that the third VP axis must be `+Y` for a right-handed Nuke coordinate system. Restore `+Y`.
+- [ ] **Step 6: Arrows don't affect the solve** — drag a vp line so its drawn start→end reverses; the focal length / camera readout is unchanged (only the dropdown sign matters).
+- [ ] **Step 7: Box mode unaffected** — switch to Box Match; the triad arrows and box solve behave exactly as before.
 
 ---
 
@@ -587,13 +642,14 @@ git commit -m "Drive VP arrows as a passive +axis readout from VP and sign"
 **Spec coverage:**
 - Sign = dropdown truth → Task 2 (remove field/function/kwarg). ✓
 - Remove `_orient_axis_by_segments` / `orient_axes_by_segments` / `_AXIS_VOTE_CONFIDENCE` → Task 2 steps 3-5. ✓
-- Box mode untouched → no box_match.py changes; verified Task 5 step 6. ✓
+- Box mode untouched → no box_match.py changes; verified Task 5 step 7. ✓
+- 3VP signed-axis mapping is honest and right-handed → Task 2 validation + Task 5 step 5. ✓
 - Colours follow axis letter, reactive, editable dropdowns → Task 3. ✓
 - Default look preserved (+X red / +Z blue / +Y green) → `axis_color` map + defaults; Task 3. ✓
 - Arrows = passive +axis readout, toward/away VP, hidden on infinity/failure/short line → Task 4 + Task 1 helper. ✓
 - Default +Y arrow up auto-fixed → Task 5 step 4. ✓
-- Testing: colour map + arrow heading unit tests (Task 1), solve sign-invariance (Task 2). ✓
+- Testing: colour map + arrow heading edge cases (Task 1), solve sign-invariance, dropdown sign effect, and 3VP Nuke-frame validation (Task 2). ✓
 
 **Placeholder scan:** No TBD/TODO; every code step has full code. ✓
 
-**Type consistency:** `axis_color(str)->str`, `axis_arrow_heading(Point2D,Point2D,Point2D,bool)->tuple[Point2D,Vector2D]|None`, `_recolor_group(str,str)`, `_store_group_vps(SolveResult|None)`, `_set_axis_arrow(str,QPointF,QPointF,float,float)`, `_HandleItem.set_color(QColor)`, `self._axes: tuple[str,str,str]`, `self._group_vp_scene: dict[str,Point2D|None]` — names used consistently across Tasks 1, 3, 4. ✓
+**Type consistency:** `axis_color(str)->str`, `axis_arrow_heading(Point2D,Point2D,Point2D,bool)->Vector2D|None`, `_recolor_group(str,str)`, `_store_group_vps(SolveResult|None)`, `_set_axis_arrow(str,QPointF,QPointF,QPointF,float)`, `_HandleItem.set_color(QColor)`, `self._axes: tuple[str,str,str]`, `self._group_vp_scene: dict[str,Point2D|None]` — names used consistently across Tasks 1, 3, 4. ✓

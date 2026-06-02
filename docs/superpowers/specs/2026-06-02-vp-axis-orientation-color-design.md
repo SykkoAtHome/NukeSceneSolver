@@ -27,10 +27,17 @@ In Vanishing-Point mode the axis model has redundant and inconsistent controls:
 - **Colors follow the axis letter**, by Nuke gizmo convention, and react to
   dropdown changes.
 - **Axis-letter dropdowns stay user-editable in every mode** (including 3VP);
-  no locking.
-- **No 2VP "ground" auto-correction** — line mode has no ground-plane concept
-  (that lives only in box mode) and always produces a right-handed frame, so
-  there is nothing to correct.
+  no locking. In 3VP mode the three selected signed axes must form the
+  right-handed Nuke frame. The third selection is validated against the axis
+  implied by the first two.
+- **2VP floor-reflection canonicalization (X/Z ground).** A right-handed frame
+  is *not* enough: a vanishing point is identical for an axis and its reverse,
+  so a single mis-drawn ground line yields a det-`+1` frame with the camera
+  mirrored *below* the X/Z floor. The 2D overlay reprojects identically for
+  both, so the error is invisible until the 3D camera is exported. The line
+  solver therefore prefers Nuke's `+Y` half-space, matching box mode's
+  `_is_reflected_below_nuke_ground_plane`. This resolves only the floor
+  reflection; the residual 180° yaw ambiguity is left to the drawn directions.
 
 ## Color convention
 
@@ -56,14 +63,20 @@ The hex values already exist in `canvas.py`:
   and the now-unused `flipped_world_axis` import if nothing else uses it) become
   dead code. **Remove them.** This reverts the direction-aware sign flip and its
   P3 refinement, which the new model makes obsolete.
+- `solver_2vp.py`: in 3VP mode, validate `third_axis` against the signed missing
+  axis implied by `first_axis` and `second_axis`. For Nuke's default
+  `+X / +Z / +Y`, the third VP arrow is therefore the readout for world up.
 - **Box mode is untouched.** Its internal `_axis_oriented_by_segments`
   (`box_match.py`) orients from the drawn box edges and is unrelated to the VP
   dropdown/arrow controls.
 
 Safety: the third camera axis is always the cross product of the two chosen axes
 (`_world_to_camera_columns`), so the frame is always right-handed and
-`_validate_rotation` (det = +1) does not start failing. Different sign choices
-rotate the frame but never reflect it.
+`_validate_rotation` (det = +1) does not start failing. A right-handed frame can
+still sit below the floor, however, so for the X/Z ground frame the solver flips
+one ground-axis sign to keep the camera in the `+Y` half-space (see the
+floor-reflection decision above); this stays det `+1` because flipping one axis
+also flips the cross-product up axis.
 
 ### 2. Colors follow the axis letter, reactively
 
@@ -90,6 +103,9 @@ rotate the frame but never reflect it.
 - Edge cases → hide the arrow: solve failed / not `ok`, the axis vanishing point is
   `None` (at infinity), or the line is shorter than the existing minimum length
   threshold.
+- The arrowhead position is only a visual placement on the marked segment. Its
+  heading stays aligned with that segment; the VP chooses which of the two line
+  directions means increasing value. The handle order has no meaning.
 - Arrow drawing therefore moves from the handle-move path (`_update_lines`) to a
   solve-result-driven update (alongside `update_grid`), and also re-runs when the
   axis sign changes.
@@ -106,13 +122,15 @@ behavior beyond color/arrow consistency, principal point, and scale calibration.
 - `scene_solver/ui/canvas.py` — `AXIS_COLORS` map; per-group recolor method;
   arrow readout driven by sign + `vanishing_points_ui`.
 - `scene_solver/core/solver_2vp.py` — remove `orient_axes_by_segments`,
-  `_orient_axis_by_segments`, `_AXIS_VOTE_CONFIDENCE`, related warnings/imports.
+  `_orient_axis_by_segments`, `_AXIS_VOTE_CONFIDENCE`, related warnings/imports;
+  validate the 3VP signed-axis assignment as a right-handed Nuke frame.
 
 ## Testing
 
 - **Unit:** axis-index → color mapping; arrow-direction sign helper (given a line,
-  a vanishing point, and a sign, the arrow points toward/away correctly). Pure
-  functions, no Qt.
+  a vanishing point, and a sign, the arrow points toward/away correctly),
+  including VP-between-handles and VP-on-handle cases. Pure functions, no Qt.
+- **Unit:** 3VP rejects an inconsistent third signed axis.
 - **Manual in Nuke:** change a dropdown letter → that group's line/handles/label
   recolor; flip `+X` ↔ `-X` → arrow flips; default `+Y` arrow points up; arrows
   never alter the solve.
