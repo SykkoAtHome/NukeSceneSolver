@@ -47,6 +47,11 @@ BOX_DIMENSION_SCALE_MODE = "Estimated match-box dimension"
 class SceneSolverPanel(QtWidgets.QWidget):
     """Interactive 2VP camera-matching panel."""
 
+    # Idle delay after the last live change before the expensive full solve
+    # (scale calibration) and Nuke state write run. Coalesces a burst of
+    # per-pixel drag updates into a single heavy refresh.
+    _REFRESH_DEBOUNCE_MS = 150
+
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._plate: PlateInfo | None = None
@@ -54,6 +59,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._last_box_dimension: BoxDimensionCalibration | None = None
         self._is_loading_state = True
         self._build_ui()
+        self._refresh_timer = QtCore.QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(self._REFRESH_DEBOUNCE_MS)
+        self._refresh_timer.timeout.connect(self._on_refresh_timeout)
         self._connect_signals()
         try:
             self._load_state_from_nuke()
@@ -236,19 +245,22 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._match_type_combo.currentTextChanged.connect(self._on_mode_changed)
         self._vp2_enable.toggled.connect(self._on_vp_check_toggled)
         self._vp3_enable.toggled.connect(self._on_vp_check_toggled)
-        self._canvas.changed.connect(self._refresh_solution)
+        # Continuous sources (handle drags, spin-box scrubbing) take the
+        # debounced path: a cheap live preview now, the heavy solve later.
+        # Discrete sources (combos, check boxes) refresh fully right away.
+        self._canvas.changed.connect(self._on_live_change)
         self._first_axis.currentTextChanged.connect(self._refresh_solution)
         self._second_axis.currentTextChanged.connect(self._refresh_solution)
         self._third_axis.currentTextChanged.connect(self._refresh_solution)
         self._auto_pp.toggled.connect(self._refresh_solution)
         self._use_pp_offset.toggled.connect(self._on_pp_offset_toggled)
-        self._sensor_width.valueChanged.connect(self._refresh_solution)
-        self._focal_length.valueChanged.connect(self._refresh_solution)
-        self._camera_distance.valueChanged.connect(self._refresh_solution)
+        self._sensor_width.valueChanged.connect(self._on_live_change)
+        self._focal_length.valueChanged.connect(self._on_live_change)
+        self._camera_distance.valueChanged.connect(self._on_live_change)
         self._scale_mode.currentTextChanged.connect(self._on_scale_mode_changed)
         self._box_dimension_axis.currentTextChanged.connect(self._refresh_solution)
-        self._box_dimension_length.valueChanged.connect(self._refresh_solution)
-        self._match_box_base_offset.valueChanged.connect(self._refresh_solution)
+        self._box_dimension_length.valueChanged.connect(self._on_live_change)
+        self._match_box_base_offset.valueChanged.connect(self._on_live_change)
         self._create_button.clicked.connect(self._create_camera)
         self._update_button.clicked.connect(self._update_camera)
         self._grid_button.clicked.connect(self._create_scene_grid)
@@ -387,7 +399,25 @@ class SceneSolverPanel(QtWidgets.QWidget):
             self._plate_label.setToolTip(str(error))
             return QtGui.QPixmap()
 
-    def _refresh_solution(self, *args) -> SolveResult:
+    def _on_live_change(self, *args) -> None:
+        """React to a continuous edit: cheap preview now, heavy solve later.
+
+        Runs a lightweight solve immediately so the overlay tracks the drag,
+        then (re)arms the debounce timer. The expensive scale calibration and
+        the Nuke state write only happen once the user pauses (see
+        ``_on_refresh_timeout``), instead of on every dragged pixel.
+        """
+        self._refresh_solution(full=False)
+        self._refresh_timer.start()
+
+    def _on_refresh_timeout(self) -> None:
+        self._refresh_solution(full=True)
+
+    def _refresh_solution(self, *args, full: bool = True) -> SolveResult:
+        if full:
+            # A synchronous full refresh supersedes any pending debounced one.
+            self._refresh_timer.stop()
+
         dimensions = self._plate or PlateInfo(None, "", 1920, 1080, "")
 
         # Update canvas labels based on current axis selection
@@ -395,10 +425,9 @@ class SceneSolverPanel(QtWidgets.QWidget):
         axis2 = self._second_axis.currentText()
         axis3 = self._third_axis.currentText()
         self._canvas.set_axis_labels(axis1, axis2, axis3)
-        self._last_box_dimension = None
 
         mode_str = self._get_current_mode()
-        
+
         # Determine Principal Point input
         principal_point: Point2D | None
         if mode_str == "3vp" and self._auto_pp.isChecked():
@@ -407,6 +436,16 @@ class SceneSolverPanel(QtWidgets.QWidget):
             principal_point = self._canvas.principal_point()
         else:
             principal_point = DEFAULT_PRINCIPAL_POINT # Force centered
+
+        mode = self._canvas.mode()
+        uses_box_dimension = (mode == "box" and self._uses_box_dimension())
+
+        # On the cheap path we skip recalibration and reuse the last solved
+        # camera distance, so the grid holds its scale while the box is dragged.
+        if uses_box_dimension and not full and self._last_box_dimension is not None:
+            effective_distance = self._last_box_dimension.camera_distance
+        else:
+            effective_distance = self._camera_distance.value()
 
         solve_input = SolveInput(
             image_width=dimensions.width,
@@ -421,7 +460,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
             third_axis=axis3,
             sensor_width_mm=self._sensor_width.value(),
             known_focal_length_mm=self._focal_length.value() if mode_str == "1vp" else None,
-            camera_distance=self._camera_distance.value(),
+            camera_distance=effective_distance,
             mode=mode_str,
             # In VP mode the drawn arrow directions resolve each axis sign (and
             # the mirror ambiguity). Box mode runs its own orientation plus an
@@ -429,30 +468,37 @@ class SceneSolverPanel(QtWidgets.QWidget):
             orient_axes_by_segments=(mode_str != "box"),
         )
         scale_error = None
-        mode = self._canvas.mode()
         if mode == "box":
             corners = self._canvas.match_box_corners()
-            if self._uses_box_dimension():
-                try:
-                    self._last_result, self._last_box_dimension = (
-                        solve_box_match_with_dimension(
-                            solve_input,
-                            corners,
-                            BoxDimensionInput(
-                                axis=self._box_dimension_axis.currentText(),
-                                length=self._box_dimension_length.value(),
-                            ),
-                            base_plane_offset=self._match_box_base_offset.value(),
+            if uses_box_dimension:
+                if full:
+                    try:
+                        self._last_result, self._last_box_dimension = (
+                            solve_box_match_with_dimension(
+                                solve_input,
+                                corners,
+                                BoxDimensionInput(
+                                    axis=self._box_dimension_axis.currentText(),
+                                    length=self._box_dimension_length.value(),
+                                ),
+                                base_plane_offset=self._match_box_base_offset.value(),
+                            )
                         )
-                    )
-                except GeometryError as error:
+                    except GeometryError as error:
+                        self._last_result = solve_box_match(solve_input, corners)
+                        self._last_box_dimension = None
+                        scale_error = str(error)
+                else:
+                    # Cheap preview at the cached scale; no recalibration. Keep
+                    # the previous calibration so the message stays consistent.
                     self._last_result = solve_box_match(solve_input, corners)
-                    scale_error = str(error)
             else:
                 self._last_result = solve_box_match(solve_input, corners)
+                self._last_box_dimension = None
         else:
             self._last_result = solve_2vp(solve_input)
-        
+            self._last_box_dimension = None
+
         if self._last_result.ok:
             # Update canvas principal point if it was auto-calculated
             if principal_point is None:
@@ -483,8 +529,11 @@ class SceneSolverPanel(QtWidgets.QWidget):
 
         # Draw perspective grid on canvas
         self._canvas.update_grid(self._last_result, axis1, axis2)
-        
-        self._save_state_to_nuke()
+
+        # Persisting on the cheap path would write the Nuke knob (and mark the
+        # script modified) on every dragged pixel; defer it to the full refresh.
+        if full:
+            self._save_state_to_nuke()
         return self._last_result
 
     def _load_state_from_nuke(self) -> None:
