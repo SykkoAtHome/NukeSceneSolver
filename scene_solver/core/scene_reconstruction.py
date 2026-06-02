@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from scene_solver.core.axes import missing_world_axis, world_axis_vector
+from scene_solver.core.axes import (
+    missing_world_axis,
+    signed_world_axis_name,
+    world_axis_vector,
+)
 from scene_solver.core.box_match import BOX_CORNER_NAMES
 from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Vector3D
 from scene_solver.core.reference_distance import (
@@ -47,11 +51,13 @@ def reconstruct_match_box(
     if missing:
         raise GeometryError(f"Match box is missing corners: {', '.join(missing)}.")
 
-    axis1 = world_axis_vector(first_axis)
-    axis2 = world_axis_vector(second_axis)
+    axis1 = world_axis_vector(signed_world_axis_name(first_axis))
+    axis2 = world_axis_vector(signed_world_axis_name(second_axis))
     if abs(axis1.dot(axis2)) > DEFAULT_TOLERANCE:
         raise GeometryError("Match box axes must be perpendicular.")
-    axis3 = world_axis_vector(missing_world_axis(first_axis, second_axis))
+    axis3 = world_axis_vector(
+        missing_world_axis(signed_world_axis_name(first_axis), signed_world_axis_name(second_axis))
+    )
     focal_plane_distance = result.relative_focal_length / 2.0
     common = {
         "dimensions": result.image_dimensions,

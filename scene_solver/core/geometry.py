@@ -7,6 +7,23 @@ from collections.abc import Iterable
 from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Segment2D
 
 
+# The accumulated normal matrix M = AtA (A = rows of unit normals) is positive
+# semi-definite, and by Cauchy-Binet det(M) = sum over line pairs of
+# sin^2(angle between that pair). Dividing by the pair count therefore yields
+# the MEAN pairwise sin^2, which equals sin^2(theta) for exactly two lines.
+# Testing that mean (instead of the raw determinant) keeps the threshold's
+# angular meaning independent of how many lines were fitted: the raw
+# determinant grows ~N^2, so a fixed floor would silently get more lenient as
+# more lines are added (e.g. box mode supplies four edges per axis).
+#
+# A 1e-6 floor rejects a mean angular spread narrower than ~0.06 degrees, where
+# the recovered intersection is dominated by handle-marking noise rather than
+# the real vanishing point. This is intentionally far stricter than
+# DEFAULT_TOLERANCE, which would silently accept near-parallel lines and return
+# a wildly unstable point.
+MIN_INTERSECTION_DETERMINANT = 1e-6
+
+
 def line_intersection(
     first: Segment2D,
     second: Segment2D,
@@ -62,8 +79,14 @@ def line_intersection_least_squares(
         normal_y_rhs += normal_y * rhs
 
     determinant = normal_x_squared * normal_y_squared - normal_xy * normal_xy
-    if abs(determinant) <= tolerance:
-        raise GeometryError("Cannot intersect parallel or nearly parallel lines.")
+    # Mean pairwise sin^2 (see MIN_INTERSECTION_DETERMINANT). len(values) >= 2 is
+    # guaranteed above, so the pair count is always >= 1.
+    pair_count = len(values) * (len(values) - 1) / 2.0
+    if determinant / pair_count <= MIN_INTERSECTION_DETERMINANT:
+        raise GeometryError(
+            "Vanishing-point lines are too close to parallel; their intersection "
+            "is numerically unstable. Mark lines that diverge more clearly."
+        )
     return Point2D(
         (normal_x_rhs * normal_y_squared - normal_xy * normal_y_rhs) / determinant,
         (normal_x_squared * normal_y_rhs - normal_xy * normal_x_rhs) / determinant,

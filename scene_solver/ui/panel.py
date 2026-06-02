@@ -11,6 +11,7 @@ from scene_solver.core import (
     BoxDimensionInput,
     DEFAULT_PRINCIPAL_POINT,
     GeometryError,
+    Point2D,
     SolveInput,
     SolveResult,
     reconstruct_match_box,
@@ -35,16 +36,24 @@ from scene_solver.nuke_integration import (
     save_state,
     update_camera,
 )
+from scene_solver.ui.axis_display import axis_letter
 from scene_solver.ui.canvas import SceneSolverCanvas
+from scene_solver.ui.state_migration import migrate_legacy_canvas_directions
 
 
-AXES = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
+AXES = ("X", "Y", "Z")
 ARBITRARY_SCALE_MODE = "Arbitrary camera distance"
 BOX_DIMENSION_SCALE_MODE = "Estimated match-box dimension"
+DIRECTED_VP_LINES_STATE_VERSION = 1
 
 
 class SceneSolverPanel(QtWidgets.QWidget):
     """Interactive 2VP camera-matching panel."""
+
+    # Idle delay after the last live change before the expensive full solve
+    # (scale calibration) and Nuke state write run. Coalesces a burst of
+    # per-pixel drag updates into a single heavy refresh.
+    _REFRESH_DEBOUNCE_MS = 150
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -53,6 +62,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._last_box_dimension: BoxDimensionCalibration | None = None
         self._is_loading_state = True
         self._build_ui()
+        self._refresh_timer = QtCore.QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(self._REFRESH_DEBOUNCE_MS)
+        self._refresh_timer.timeout.connect(self._on_refresh_timeout)
         self._connect_signals()
         try:
             self._load_state_from_nuke()
@@ -90,20 +103,44 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._vp2_enable.setChecked(True)
         self._second_axis = QtWidgets.QComboBox()
         self._second_axis.addItems(AXES)
-        self._second_axis.setCurrentText("+Z")
+        self._second_axis.setCurrentText("Z")
         
         self._vp3_enable = QtWidgets.QCheckBox("Third VP axis")
         self._vp3_enable.setChecked(False)
         self._third_axis = QtWidgets.QComboBox()
         self._third_axis.addItems(AXES)
-        self._third_axis.setCurrentText("+Y")
+        self._third_axis.setCurrentText("Y")
         
-        self._auto_pp = QtWidgets.QCheckBox("Auto Principal Point (3VP only)")
+        self._auto_pp = QtWidgets.QCheckBox("Auto optical center (PP, 3VP only)")
         self._auto_pp.setChecked(True)
         
-        self._use_pp_offset = QtWidgets.QCheckBox("Adjust Principal Point")
-        self._use_pp_offset.setToolTip("Allow the optical center to be off-center (Lens Shift).")
+        self._use_pp_offset = QtWidgets.QCheckBox("Manual optical center override")
+        self._use_pp_offset.setToolTip(
+            "Leave disabled unless the plate was cropped, reframed, stabilized, "
+            "or shot with lens shift. Prefer 3VP Auto optical center when possible."
+        )
         self._use_pp_offset.setChecked(False)
+
+        self._manual_pp_warning = QtWidgets.QLabel(
+            "2VP manual optical center is an assumption, not a solved value. "
+            "Leave it disabled unless you know why the optical center is off-center."
+        )
+        self._manual_pp_warning.setWordWrap(True)
+        self._manual_pp_warning.setStyleSheet("color: #e4bd72;")
+        self._manual_pp_warning.setVisible(False)
+
+        self._advanced_group = QtWidgets.QGroupBox("Advanced")
+        advanced_layout = QtWidgets.QVBoxLayout(self._advanced_group)
+        advanced_layout.setContentsMargins(8, 6, 8, 8)
+        advanced_layout.addWidget(self._use_pp_offset)
+        advanced_layout.addWidget(self._manual_pp_warning)
+
+        self._flip_world_up = QtWidgets.QCheckBox("Flip world up (1VP only)")
+        self._flip_world_up.setToolTip(
+            "Use the inverted world-up solution for rolled or upside-down 1VP shots."
+        )
+        self._flip_world_up.setChecked(False)
+        self._flip_world_up.setVisible(False)
         
         self._sensor_width = QtWidgets.QDoubleSpinBox()
         self._sensor_width.setRange(1.0, 200.0)
@@ -142,7 +179,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._match_box_base_offset.setValue(0.0)
         self._match_box_base_offset.setToolTip(
             "Coordinate of the match-box base plane along the derived third axis. "
-            "For the default +X/+Z ground axes this is the base Y coordinate."
+            "For the default X/Z ground axes this is the base Y coordinate."
         )
         
         self._vp_axes_row = QtWidgets.QWidget()
@@ -161,7 +198,8 @@ class SceneSolverPanel(QtWidgets.QWidget):
         options.addRow("Matching Mode", self._match_type_combo)
         options.addRow("VP Axes", self._vp_axes_row)
         options.addRow("", self._auto_pp)
-        options.addRow("", self._use_pp_offset)
+        options.addRow("", self._advanced_group)
+        options.addRow("", self._flip_world_up)
 
         self._sensor_width_row = QtWidgets.QWidget()
         row_layout = QtWidgets.QHBoxLayout(self._sensor_width_row)
@@ -235,19 +273,23 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._match_type_combo.currentTextChanged.connect(self._on_mode_changed)
         self._vp2_enable.toggled.connect(self._on_vp_check_toggled)
         self._vp3_enable.toggled.connect(self._on_vp_check_toggled)
-        self._canvas.changed.connect(self._refresh_solution)
+        # Continuous sources (handle drags, spin-box scrubbing) take the
+        # debounced path: a cheap live preview now, the heavy solve later.
+        # Discrete sources (combos, check boxes) refresh fully right away.
+        self._canvas.changed.connect(self._on_live_change)
         self._first_axis.currentTextChanged.connect(self._refresh_solution)
         self._second_axis.currentTextChanged.connect(self._refresh_solution)
         self._third_axis.currentTextChanged.connect(self._refresh_solution)
         self._auto_pp.toggled.connect(self._refresh_solution)
         self._use_pp_offset.toggled.connect(self._on_pp_offset_toggled)
-        self._sensor_width.valueChanged.connect(self._refresh_solution)
-        self._focal_length.valueChanged.connect(self._refresh_solution)
-        self._camera_distance.valueChanged.connect(self._refresh_solution)
+        self._flip_world_up.toggled.connect(self._refresh_solution)
+        self._sensor_width.valueChanged.connect(self._on_live_change)
+        self._focal_length.valueChanged.connect(self._on_live_change)
+        self._camera_distance.valueChanged.connect(self._on_live_change)
         self._scale_mode.currentTextChanged.connect(self._on_scale_mode_changed)
         self._box_dimension_axis.currentTextChanged.connect(self._refresh_solution)
-        self._box_dimension_length.valueChanged.connect(self._refresh_solution)
-        self._match_box_base_offset.valueChanged.connect(self._refresh_solution)
+        self._box_dimension_length.valueChanged.connect(self._on_live_change)
+        self._match_box_base_offset.valueChanged.connect(self._on_live_change)
         self._create_button.clicked.connect(self._create_camera)
         self._update_button.clicked.connect(self._update_camera)
         self._grid_button.clicked.connect(self._create_scene_grid)
@@ -304,6 +346,8 @@ class SceneSolverPanel(QtWidgets.QWidget):
         # Focal length
         self._set_row_visible(self._focal_length_row, is_1vp)
         self._focal_length.setEnabled(is_1vp)
+        self._set_row_visible(self._flip_world_up, is_1vp)
+        self._flip_world_up.setEnabled(is_1vp)
         
         # Box specific
         self._set_row_visible(self._base_offset_row, is_box)
@@ -322,6 +366,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
     def _on_pp_offset_toggled(self) -> None:
         mode = self._get_current_mode()
         show_pp = self._use_pp_offset.isChecked()
+        self._manual_pp_warning.setVisible(mode == "2vp" and show_pp)
         # Hide PP crosshair if it's being auto-calculated so the user isn't confused
         if mode == "3vp" and self._auto_pp.isChecked():
             show_pp = False
@@ -386,7 +431,40 @@ class SceneSolverPanel(QtWidgets.QWidget):
             self._plate_label.setToolTip(str(error))
             return QtGui.QPixmap()
 
-    def _refresh_solution(self, *args) -> SolveResult:
+    def _on_live_change(self, *args) -> None:
+        """React to a continuous edit: cheap preview now, heavy solve later.
+
+        Runs a lightweight solve immediately so the overlay tracks the drag,
+        then (re)arms the debounce timer. The expensive scale calibration and
+        the Nuke state write only happen once the user pauses (see
+        ``_on_refresh_timeout``), instead of on every dragged pixel.
+        """
+        self._refresh_solution(full=False)
+        self._refresh_timer.start()
+
+    def _on_refresh_timeout(self) -> None:
+        self._refresh_solution(full=True)
+
+    def _flush_pending_refresh(self) -> None:
+        """Run any debounced full refresh now instead of waiting for the timer.
+
+        The cheap live path defers the heavy solve and the Nuke state write to
+        the debounce timeout. If the panel is closed inside that window the
+        timer is destroyed and the last edit would never be persisted, leaving
+        the saved knob (and the cached scale calibration) stale. Flush on close.
+        """
+        if self._refresh_timer.isActive():
+            self._refresh_solution(full=True)
+
+    def closeEvent(self, event) -> None:
+        self._flush_pending_refresh()
+        super().closeEvent(event)
+
+    def _refresh_solution(self, *args, full: bool = True) -> SolveResult:
+        if full:
+            # A synchronous full refresh supersedes any pending debounced one.
+            self._refresh_timer.stop()
+
         dimensions = self._plate or PlateInfo(None, "", 1920, 1080, "")
 
         # Update canvas labels based on current axis selection
@@ -394,10 +472,9 @@ class SceneSolverPanel(QtWidgets.QWidget):
         axis2 = self._second_axis.currentText()
         axis3 = self._third_axis.currentText()
         self._canvas.set_axis_labels(axis1, axis2, axis3)
-        self._last_box_dimension = None
 
         mode_str = self._get_current_mode()
-        
+
         # Determine Principal Point input
         principal_point: Point2D | None
         if mode_str == "3vp" and self._auto_pp.isChecked():
@@ -406,6 +483,16 @@ class SceneSolverPanel(QtWidgets.QWidget):
             principal_point = self._canvas.principal_point()
         else:
             principal_point = DEFAULT_PRINCIPAL_POINT # Force centered
+
+        mode = self._canvas.mode()
+        uses_box_dimension = (mode == "box" and self._uses_box_dimension())
+
+        # On the cheap path we skip recalibration and reuse the last solved
+        # camera distance, so the grid holds its scale while the box is dragged.
+        if uses_box_dimension and not full and self._last_box_dimension is not None:
+            effective_distance = self._last_box_dimension.camera_distance
+        else:
+            effective_distance = self._camera_distance.value()
 
         solve_input = SolveInput(
             image_width=dimensions.width,
@@ -420,34 +507,42 @@ class SceneSolverPanel(QtWidgets.QWidget):
             third_axis=axis3,
             sensor_width_mm=self._sensor_width.value(),
             known_focal_length_mm=self._focal_length.value() if mode_str == "1vp" else None,
-            camera_distance=self._camera_distance.value(),
+            flip_world_up=self._flip_world_up.isChecked(),
+            camera_distance=effective_distance,
             mode=mode_str,
         )
         scale_error = None
-        mode = self._canvas.mode()
         if mode == "box":
             corners = self._canvas.match_box_corners()
-            if self._uses_box_dimension():
-                try:
-                    self._last_result, self._last_box_dimension = (
-                        solve_box_match_with_dimension(
-                            solve_input,
-                            corners,
-                            BoxDimensionInput(
-                                axis=self._box_dimension_axis.currentText(),
-                                length=self._box_dimension_length.value(),
-                            ),
-                            base_plane_offset=self._match_box_base_offset.value(),
+            if uses_box_dimension:
+                if full:
+                    try:
+                        self._last_result, self._last_box_dimension = (
+                            solve_box_match_with_dimension(
+                                solve_input,
+                                corners,
+                                BoxDimensionInput(
+                                    axis=self._box_dimension_axis.currentText(),
+                                    length=self._box_dimension_length.value(),
+                                ),
+                                base_plane_offset=self._match_box_base_offset.value(),
+                            )
                         )
-                    )
-                except GeometryError as error:
+                    except GeometryError as error:
+                        self._last_result = solve_box_match(solve_input, corners)
+                        self._last_box_dimension = None
+                        scale_error = str(error)
+                else:
+                    # Cheap preview at the cached scale; no recalibration. Keep
+                    # the previous calibration so the message stays consistent.
                     self._last_result = solve_box_match(solve_input, corners)
-                    scale_error = str(error)
             else:
                 self._last_result = solve_box_match(solve_input, corners)
+                self._last_box_dimension = None
         else:
             self._last_result = solve_2vp(solve_input)
-        
+            self._last_box_dimension = None
+
         if self._last_result.ok:
             # Update canvas principal point if it was auto-calculated
             if principal_point is None:
@@ -458,27 +553,31 @@ class SceneSolverPanel(QtWidgets.QWidget):
         elif self._last_result.ok:
             assert self._last_result.focal_length_mm is not None
             assert self._last_result.horizontal_fov_radians is not None
-            warnings = " ".join(self._last_result.warnings)
-            scale_status = ""
+            parts = [
+                f"Ready. Focal: {self._last_result.focal_length_mm:.3f} mm, "
+                f"horizontal FOV: {degrees(self._last_result.horizontal_fov_radians):.2f} deg."
+            ]
             if self._last_box_dimension is not None:
-                scale_status = (
-                    " Scene scale: estimated from match-box "
+                parts.append(
+                    "Scene scale: estimated from match-box "
                     f"{self._last_box_dimension.axis} = "
                     f"{self._last_box_dimension.length:g} world units."
                 )
-            self._message.setText(
-                f"Ready. Focal: {self._last_result.focal_length_mm:.3f} mm, "
-                f"horizontal FOV: {degrees(self._last_result.horizontal_fov_radians):.2f} deg. "
-                f"{scale_status} {warnings}"
-            )
+            warnings = " ".join(self._last_result.warnings)
+            if warnings:
+                parts.append(warnings)
+            self._message.setText(" ".join(parts))
             self._message.setStyleSheet("color: #c6e6c6;")
         else:
             self._show_error(" ".join(self._last_result.errors))
 
         # Draw perspective grid on canvas
-        self._canvas.update_grid(self._last_result, axis1, axis2)
-        
-        self._save_state_to_nuke()
+        self._canvas.update_grid(self._last_result, axis1, axis2, refresh_lines=False)
+
+        # Persisting on the cheap path would write the Nuke knob (and mark the
+        # script modified) on every dragged pixel; defer it to the full refresh.
+        if full:
+            self._save_state_to_nuke()
         return self._last_result
 
     def _load_state_from_nuke(self) -> None:
@@ -526,15 +625,17 @@ class SceneSolverPanel(QtWidgets.QWidget):
                     self._vp3_enable.setChecked(True)
 
             if "first_axis" in state:
-                self._first_axis.setCurrentText(state["first_axis"])
+                self._first_axis.setCurrentText(axis_letter(state["first_axis"]))
             if "second_axis" in state:
-                self._second_axis.setCurrentText(state["second_axis"])
+                self._second_axis.setCurrentText(axis_letter(state["second_axis"]))
             if "third_axis" in state:
-                self._third_axis.setCurrentText(state["third_axis"])
+                self._third_axis.setCurrentText(axis_letter(state["third_axis"]))
             if "auto_pp" in state:
                 self._auto_pp.setChecked(state["auto_pp"])
             if "use_pp_offset" in state:
                 self._use_pp_offset.setChecked(state["use_pp_offset"])
+            if "flip_world_up" in state:
+                self._flip_world_up.setChecked(state["flip_world_up"])
             if "sensor_width" in state:
                 self._sensor_width.setValue(state["sensor_width"])
             if "focal_length" in state:
@@ -552,7 +653,24 @@ class SceneSolverPanel(QtWidgets.QWidget):
             
             # Restore Canvas state
             if "canvas" in state:
-                self._canvas.set_state(state["canvas"])
+                canvas_state = state["canvas"]
+                if state.get("directed_vp_lines_version") != DIRECTED_VP_LINES_STATE_VERSION:
+                    principal_point = None
+                    if not state.get("auto_pp", True):
+                        principal_point = DEFAULT_PRINCIPAL_POINT
+                        if state.get("use_pp_offset"):
+                            values = canvas_state.get("principal_point")
+                            if values is not None:
+                                principal_point = Point2D(values["x"], values["y"])
+                    canvas_state = migrate_legacy_canvas_directions(
+                        canvas_state,
+                        first_axis=state.get("first_axis", "+X"),
+                        second_axis=state.get("second_axis", "+Z"),
+                        third_axis=state.get("third_axis", "+Y"),
+                        mode=self._get_current_mode(),
+                        principal_point=principal_point,
+                    )
+                self._canvas.set_state(canvas_state)
         except (KeyError, TypeError, ValueError):
             return
 
@@ -569,6 +687,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
             "third_axis": self._third_axis.currentText(),
             "auto_pp": self._auto_pp.isChecked(),
             "use_pp_offset": self._use_pp_offset.isChecked(),
+            "flip_world_up": self._flip_world_up.isChecked(),
             "sensor_width": self._sensor_width.value(),
             "focal_length": self._focal_length.value(),
             "scale_mode": self._scale_mode.currentText(),
@@ -576,6 +695,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
             "box_dimension_axis": self._box_dimension_axis.currentText(),
             "box_dimension_length": self._box_dimension_length.value(),
             "match_box_base_offset": self._match_box_base_offset.value(),
+            "directed_vp_lines_version": DIRECTED_VP_LINES_STATE_VERSION,
             "canvas": self._canvas.get_state(),
         }
         save_state(state)

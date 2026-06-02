@@ -2,6 +2,7 @@
 
 from scene_solver.core.axes import (
     flipped_world_axis,
+    is_nuke_ground_plane_axes,
     missing_world_axis,
     normalized_world_axis_name,
     parse_world_axis,
@@ -36,6 +37,7 @@ from scene_solver.core.projection import (
     camera_direction_to_solver_point,
     solver_projection_matrix,
     solver_point_to_camera_ray,
+    world_plane_horizon_solver_line,
 )
 from scene_solver.core.reference_distance import (
     ReferenceDistanceCalibration,
@@ -70,6 +72,7 @@ __all__ = [
     "line_intersection_least_squares",
     "pixel_to_ui",
     "flipped_world_axis",
+    "is_nuke_ground_plane_axes",
     "missing_world_axis",
     "normalized_world_axis_name",
     "parse_world_axis",
@@ -79,6 +82,7 @@ __all__ = [
     "solve_box_match_with_dimension",
     "solver_point_to_camera_ray",
     "solver_projection_matrix",
+    "world_plane_horizon_solver_line",
     "solver_to_ui",
     "ui_to_pixel",
     "ui_to_solver",
