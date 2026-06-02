@@ -38,6 +38,7 @@ from scene_solver.nuke_integration import (
 )
 from scene_solver.ui.axis_display import axis_letter
 from scene_solver.ui.canvas import SceneSolverCanvas
+from scene_solver.ui.state_migration import migrate_legacy_canvas_directions
 
 
 AXES = ("X", "Y", "Z")
@@ -116,6 +117,13 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._use_pp_offset = QtWidgets.QCheckBox("Adjust Principal Point")
         self._use_pp_offset.setToolTip("Allow the optical center to be off-center (Lens Shift).")
         self._use_pp_offset.setChecked(False)
+
+        self._flip_world_up = QtWidgets.QCheckBox("Flip world up (1VP only)")
+        self._flip_world_up.setToolTip(
+            "Use the inverted world-up solution for rolled or upside-down 1VP shots."
+        )
+        self._flip_world_up.setChecked(False)
+        self._flip_world_up.setVisible(False)
         
         self._sensor_width = QtWidgets.QDoubleSpinBox()
         self._sensor_width.setRange(1.0, 200.0)
@@ -174,6 +182,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         options.addRow("VP Axes", self._vp_axes_row)
         options.addRow("", self._auto_pp)
         options.addRow("", self._use_pp_offset)
+        options.addRow("", self._flip_world_up)
 
         self._sensor_width_row = QtWidgets.QWidget()
         row_layout = QtWidgets.QHBoxLayout(self._sensor_width_row)
@@ -256,6 +265,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._third_axis.currentTextChanged.connect(self._refresh_solution)
         self._auto_pp.toggled.connect(self._refresh_solution)
         self._use_pp_offset.toggled.connect(self._on_pp_offset_toggled)
+        self._flip_world_up.toggled.connect(self._refresh_solution)
         self._sensor_width.valueChanged.connect(self._on_live_change)
         self._focal_length.valueChanged.connect(self._on_live_change)
         self._camera_distance.valueChanged.connect(self._on_live_change)
@@ -319,6 +329,8 @@ class SceneSolverPanel(QtWidgets.QWidget):
         # Focal length
         self._set_row_visible(self._focal_length_row, is_1vp)
         self._focal_length.setEnabled(is_1vp)
+        self._set_row_visible(self._flip_world_up, is_1vp)
+        self._flip_world_up.setEnabled(is_1vp)
         
         # Box specific
         self._set_row_visible(self._base_offset_row, is_box)
@@ -477,6 +489,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
             third_axis=axis3,
             sensor_width_mm=self._sensor_width.value(),
             known_focal_length_mm=self._focal_length.value() if mode_str == "1vp" else None,
+            flip_world_up=self._flip_world_up.isChecked(),
             camera_distance=effective_distance,
             mode=mode_str,
         )
@@ -541,7 +554,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
             self._show_error(" ".join(self._last_result.errors))
 
         # Draw perspective grid on canvas
-        self._canvas.update_grid(self._last_result, axis1, axis2)
+        self._canvas.update_grid(self._last_result, axis1, axis2, refresh_lines=False)
 
         # Persisting on the cheap path would write the Nuke knob (and mark the
         # script modified) on every dragged pixel; defer it to the full refresh.
@@ -603,6 +616,8 @@ class SceneSolverPanel(QtWidgets.QWidget):
                 self._auto_pp.setChecked(state["auto_pp"])
             if "use_pp_offset" in state:
                 self._use_pp_offset.setChecked(state["use_pp_offset"])
+            if "flip_world_up" in state:
+                self._flip_world_up.setChecked(state["flip_world_up"])
             if "sensor_width" in state:
                 self._sensor_width.setValue(state["sensor_width"])
             if "focal_length" in state:
@@ -622,7 +637,21 @@ class SceneSolverPanel(QtWidgets.QWidget):
             if "canvas" in state:
                 canvas_state = state["canvas"]
                 if state.get("directed_vp_lines_version") != DIRECTED_VP_LINES_STATE_VERSION:
-                    canvas_state = _migrate_legacy_canvas_directions(canvas_state)
+                    principal_point = None
+                    if not state.get("auto_pp", True):
+                        principal_point = DEFAULT_PRINCIPAL_POINT
+                        if state.get("use_pp_offset"):
+                            values = canvas_state.get("principal_point")
+                            if values is not None:
+                                principal_point = Point2D(values["x"], values["y"])
+                    canvas_state = migrate_legacy_canvas_directions(
+                        canvas_state,
+                        first_axis=state.get("first_axis", "+X"),
+                        second_axis=state.get("second_axis", "+Z"),
+                        third_axis=state.get("third_axis", "+Y"),
+                        mode=self._get_current_mode(),
+                        principal_point=principal_point,
+                    )
                 self._canvas.set_state(canvas_state)
         except (KeyError, TypeError, ValueError):
             return
@@ -640,6 +669,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
             "third_axis": self._third_axis.currentText(),
             "auto_pp": self._auto_pp.isChecked(),
             "use_pp_offset": self._use_pp_offset.isChecked(),
+            "flip_world_up": self._flip_world_up.isChecked(),
             "sensor_width": self._sensor_width.value(),
             "focal_length": self._focal_length.value(),
             "scale_mode": self._scale_mode.currentText(),
@@ -717,15 +747,3 @@ class SceneSolverPanel(QtWidgets.QWidget):
     def _require_scene_scale(self) -> None:
         if self._uses_box_dimension() and self._last_box_dimension is None:
             raise GeometryError("Could not estimate scene scale from the current match box.")
-
-
-def _migrate_legacy_canvas_directions(
-    canvas_state: dict[str, dict[str, float]],
-) -> dict[str, dict[str, float]]:
-    """Choose the Nuke-upright mirror when old saved lines had no direction contract."""
-    migrated = {name: dict(position) for name, position in canvas_state.items()}
-    for line in ("vp2_a", "vp2_b"):
-        start, end = f"{line}_start", f"{line}_end"
-        if start in migrated and end in migrated:
-            migrated[start], migrated[end] = migrated[end], migrated[start]
-    return migrated

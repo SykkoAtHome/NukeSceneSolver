@@ -6,8 +6,10 @@ import dataclasses
 
 import pytest
 
+from scene_solver.core.coordinates import ImageDimensions
 from scene_solver.core.models import Point2D, Segment2D
-from scene_solver.core.solver_2vp import SolveInput, solve_2vp
+from scene_solver.core.models import Vector3D
+from scene_solver.core.solver_2vp import SolveInput, _validate_third_axis_segments, solve_2vp
 
 
 def _segment(ax, ay, bx, by):
@@ -69,6 +71,25 @@ def test_1vp_horizon_is_undirected_and_chooses_nuke_upright_y():
     )
     assert forward.ok and reversed_horizon.ok
     assert forward.camera_to_world_matrix == reversed_horizon.camera_to_world_matrix
+
+
+def test_1vp_can_flip_world_up_for_upside_down_shots():
+    vp1 = (_segment(0.10, 0.40, 0.50, 0.45), _segment(0.10, 0.60, 0.50, 0.55))
+    solve_input = dataclasses.replace(
+        _base_input(vp1, (_segment(0.20, 0.50, 0.80, 0.50),)),
+        mode="1vp",
+        known_focal_length_mm=50.0,
+    )
+    upright = solve_2vp(solve_input)
+    upside_down = solve_2vp(dataclasses.replace(solve_input, flip_world_up=True))
+
+    assert upright.ok and upside_down.ok
+    assert upright.camera_to_world_matrix != upside_down.camera_to_world_matrix
+    assert upright.camera_to_world_matrix is not None
+    assert upside_down.camera_to_world_matrix is not None
+    upright_y = tuple(row[1] for row in upright.camera_to_world_matrix.rows[:3])
+    upside_down_y = tuple(row[1] for row in upside_down.camera_to_world_matrix.rows[:3])
+    assert upside_down_y == pytest.approx(tuple(-component for component in upright_y))
 
 
 def test_1vp_rejects_y_as_the_only_marked_axis():
@@ -152,7 +173,21 @@ def test_3vp_rejects_opposing_parallel_y_directions():
     )
     assert not result.ok
     assert result.errors == (
-        "The Y VP lines must use a consistent direction.",
+        "The Y VP lines point opposite to the solved Nuke axis direction.",
+    )
+
+
+def test_3vp_accepts_finite_vp_between_consistently_oriented_segments():
+    _validate_third_axis_segments(
+        "Y",
+        (
+            _segment(0.20, 0.50, 0.50, 0.50),
+            _segment(0.80, 0.50, 0.50, 0.50),
+        ),
+        dimensions=ImageDimensions(1000, 1000),
+        principal_point=Point2D(0.50, 0.50),
+        focal_plane_distance=1.0,
+        expected_camera_direction=Vector3D(0.0, 0.0, -1.0),
     )
 
 

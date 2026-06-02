@@ -2,6 +2,7 @@
 
 from scene_solver.core.axes import (
     flipped_world_axis,
+    is_nuke_ground_plane_axes,
     missing_world_axis,
     normalized_world_axis_name,
     parse_world_axis,
@@ -71,6 +72,7 @@ __all__ = [
     "line_intersection_least_squares",
     "pixel_to_ui",
     "flipped_world_axis",
+    "is_nuke_ground_plane_axes",
     "missing_world_axis",
     "normalized_world_axis_name",
     "parse_world_axis",

@@ -6,7 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from math import isclose, isfinite
 
-from scene_solver.core.axes import flipped_world_axis, normalized_world_axis_name
+from scene_solver.core.axes import (
+    flipped_world_axis,
+    is_nuke_ground_plane_axes,
+    normalized_world_axis_name,
+    signed_world_axis_name,
+    world_axis_index,
+)
 from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Segment2D
 
 
@@ -103,8 +109,8 @@ def solve_box_match(solve_input, corners: Mapping[str, Point2D]):
         solve_input,
         vp1_segments=first_segments,
         vp2_segments=second_segments,
-        first_axis=_axis_oriented_by_segments(solve_input.first_axis, first_segments, first_vp),
-        second_axis=_axis_oriented_by_segments(
+        first_axis=_box_axis_oriented_by_segments(solve_input.first_axis, first_segments, first_vp),
+        second_axis=_box_axis_oriented_by_segments(
             solve_input.second_axis,
             second_segments,
             second_vp,
@@ -224,14 +230,14 @@ def solve_box_match_with_dimension(
     )
 
 
-def _axis_oriented_by_segments(
+def _box_axis_oriented_by_segments(
     axis: str,
     segments: tuple[Segment2D, ...],
     vanishing_point: Point2D,
 ) -> str:
     """Flip an axis when positive box edges run away from their vanishing point."""
 
-    signed_axis = axis if axis.startswith(("+", "-")) else f"+{normalized_world_axis_name(axis)}"
+    signed_axis = signed_world_axis_name(axis)
     score = 0.0
     for segment in segments:
         direction = segment.direction().normalized()
@@ -247,11 +253,13 @@ def _is_reflected_below_nuke_ground_plane(result, solve_input) -> bool:
 
     if not result.ok or result.camera_position is None:
         return False
-    axes = {
-        solve_input.first_axis.upper().strip("+-"),
-        solve_input.second_axis.upper().strip("+-"),
-    }
-    return axes == {"X", "Z"} and result.camera_position.y < -DEFAULT_TOLERANCE
+    return (
+        is_nuke_ground_plane_axes(
+            world_axis_index(solve_input.first_axis),
+            world_axis_index(solve_input.second_axis),
+        )
+        and result.camera_position.y < -DEFAULT_TOLERANCE
+    )
 
 
 def _dimension_axis(axis: str) -> str:

@@ -12,9 +12,11 @@ from dataclasses import dataclass
 from math import atan, isfinite, sqrt
 
 from scene_solver.core.axes import (
+    is_nuke_ground_plane_axes,
     missing_world_axis,
     normalized_world_axis_name,
     parse_world_axis,
+    signed_world_axis_name,
     world_axis_index,
 )
 from scene_solver.core.coordinates import (
@@ -66,6 +68,7 @@ class SolveInput:
     third_axis: str = "Z"
     sensor_width_mm: float = DEFAULT_SENSOR_WIDTH_MM
     known_focal_length_mm: float | None = None
+    flip_world_up: bool = False
     camera_distance: float = DEFAULT_CAMERA_DISTANCE
     reference_distance: ReferenceDistanceInput | None = None
     mode: str = "2vp"
@@ -116,8 +119,8 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
         _validate_scalar("Sensor width", solve_input.sensor_width_mm)
         _validate_scalar("Camera distance", solve_input.camera_distance)
         preserve_sign = solve_input.mode == "box"
-        first_axis_name = _solve_axis_name(solve_input.first_axis, preserve_sign=preserve_sign)
-        second_axis_name = _solve_axis_name(solve_input.second_axis, preserve_sign=preserve_sign)
+        first_axis_name = signed_world_axis_name(solve_input.first_axis, preserve_sign=preserve_sign)
+        second_axis_name = signed_world_axis_name(solve_input.second_axis, preserve_sign=preserve_sign)
 
         if solve_input.mode == "1vp":
             return _solve_1vp(solve_input, dimensions)
@@ -163,10 +166,9 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             dimensions,
             principal_point,
         )
-        if solve_input.mode == "box":
-            first_axis_name = _solve_axis_name(solve_input.first_axis, preserve_sign=True)
-            second_axis_name = _solve_axis_name(solve_input.second_axis, preserve_sign=True)
-        else:
+        # Box mode keeps the signed names derived above (preserve_sign=True);
+        # line modes re-derive the orientation from the drawn segment direction.
+        if solve_input.mode != "box":
             first_axis_name = _axis_oriented_by_segments(
                 solve_input.first_axis,
                 solve_input.vp1_segments,
@@ -313,6 +315,7 @@ def _solve_1vp(solve_input: SolveInput, dimensions: ImageDimensions) -> SolveRes
         first_axis,
         r_h1,
         r_h2,
+        flip_world_up=solve_input.flip_world_up,
     )
     return _finalize_result(
         solve_input,
@@ -336,11 +339,15 @@ def _one_vp_camera_to_world_rotation(
     first_axis: tuple[int, float],
     first_horizon_ray: Vector3D,
     second_horizon_ray: Vector3D,
+    *,
+    flip_world_up: bool = False,
 ) -> Matrix4:
     """Recover rotation from one axis vanishing point and the ground horizon."""
 
     world_up_camera = first_horizon_ray.cross(second_horizon_ray).normalized()
     if world_up_camera.y < 0.0:
+        world_up_camera = world_up_camera * -1.0
+    if flip_world_up:
         world_up_camera = world_up_camera * -1.0
     primary_axis_idx = first_axis[0]
     primary_axis_dir = first_camera_direction * first_axis[1]
@@ -413,14 +420,6 @@ def _validate_scalar(name: str, value: float) -> None:
         raise GeometryError(f"{name} must be a finite positive value.")
 
 
-def _solve_axis_name(axis: str, *, preserve_sign: bool) -> str:
-    """Return a signed axis for internal solving from a UI axis selector."""
-    letter = normalized_world_axis_name(axis)
-    if preserve_sign and axis.startswith("-"):
-        return f"-{letter}"
-    return f"+{letter}"
-
-
 def _axis_oriented_by_segments(
     axis: str,
     segments: tuple[Segment2D, ...],
@@ -480,7 +479,6 @@ def _validate_third_axis_segments(
         except GeometryError as error:
             raise GeometryError(f"Could not resolve the projected {letter} axis direction.") from error
 
-    reference_heading: Vector2D | None = None
     for segment in segments:
         try:
             heading = segment.direction().normalized()
@@ -493,10 +491,6 @@ def _validate_third_axis_segments(
         except GeometryError as error:
             raise GeometryError(f"The {letter} VP lines must have a visible direction.") from error
 
-        if reference_heading is not None and heading.dot(reference_heading) <= DEFAULT_TOLERANCE:
-            raise GeometryError(
-                f"The {letter} VP lines must use a consistent direction."
-            )
         alignment = heading.dot(desired_heading)
         if alignment <= DEFAULT_TOLERANCE:
             raise GeometryError(
@@ -506,7 +500,6 @@ def _validate_third_axis_segments(
             raise GeometryError(
                 f"The {letter} VP lines do not align with the solved Nuke axis direction."
             )
-        reference_heading = heading
 
 
 def _intersect_ui_segments(
@@ -613,7 +606,7 @@ def _reflects_below_nuke_floor(
     """
     if mode == "box":
         return False
-    if {first_axis[0], second_axis[0]} != {world_axis_index("X"), world_axis_index("Z")}:
+    if not is_nuke_ground_plane_axes(first_axis[0], second_axis[0]):
         return False
     origin_solver = ui_to_solver(origin, dimensions, principal_point)
     origin_world_ray = camera_to_world_rotation.transform_direction(

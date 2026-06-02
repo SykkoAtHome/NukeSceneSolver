@@ -14,6 +14,7 @@ WORLD_AXIS_VECTORS = {
     "-Z": Vector3D(0.0, 0.0, -1.0),
 }
 _AXIS_INDICES = {"X": 0, "Y": 1, "Z": 2}
+_NUKE_GROUND_AXIS_INDICES = {_AXIS_INDICES["X"], _AXIS_INDICES["Z"]}
 
 
 def world_axis_vector(axis: str) -> Vector3D:
@@ -45,6 +46,26 @@ def normalized_world_axis_name(axis: str) -> str:
     """Return an unsigned normalized axis name."""
 
     return tuple(_AXIS_INDICES)[world_axis_index(axis)]
+
+
+def is_nuke_ground_plane_axes(first_axis_index: int, second_axis_index: int) -> bool:
+    """Return whether two component indices describe Nuke's X/Z ground plane."""
+
+    return {first_axis_index, second_axis_index} == _NUKE_GROUND_AXIS_INDICES
+
+
+def signed_world_axis_name(axis: str, *, preserve_sign: bool = True) -> str:
+    """Return a signed axis name, treating a letter-only UI axis as positive.
+
+    A leading ``-`` is kept only when ``preserve_sign`` is set; every other
+    input (unsigned, or any axis when ``preserve_sign`` is false) normalizes to
+    the positive axis.
+    """
+
+    letter = normalized_world_axis_name(axis)
+    if preserve_sign and axis.startswith("-"):
+        return f"-{letter}"
+    return f"+{letter}"
 
 
 def flipped_world_axis(axis: str) -> str:

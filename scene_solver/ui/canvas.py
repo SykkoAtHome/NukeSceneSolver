@@ -223,8 +223,10 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._extend_visible = False
         self._reference_visible = False
         self._snap_enabled = False
+        self._origin_snap_targets: list[tuple[float, float]] | None = None
         self._dim_enabled = False
         self._mode = "lines"
+        self._last_axis_label_state: tuple[str, str, str, str] | None = None
         self._last_grid_result: SolveResult | None = None
         self._last_grid_axes = ("X", "Z")
         self._undo_buffer: dict[str, Point2D] | None = None
@@ -307,6 +309,8 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             # Origin-only snap: runs after the shared _handle_moved slot, so a
             # snap reposition lands on the already-updated label/lines.
             self._handles["origin"].signals.moved.connect(self._snap_origin_if_enabled)
+            self._handles["origin"].signals.pressed.connect(self._cache_origin_snap_targets)
+            self._handles["origin"].signals.released.connect(self._clear_origin_snap_targets)
             self._handles["principal_point"] = self._create_handle(
                 DEFAULT_POSITIONS["principal_point"], "#ffffff"
             )
@@ -471,6 +475,10 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
 
     def set_axis_labels(self, axis1: str, axis2: str, axis3: str = "Y") -> None:
         """Update labels and colours to reflect assigned world axes."""
+        label_state = (axis1, axis2, axis3, self._mode)
+        if label_state == self._last_axis_label_state:
+            return
+        self._last_axis_label_state = label_state
         for group, axis in (("vp1", axis1), ("vp2", axis2), ("vp3", axis3)):
             for name in (f"{group}_a", f"{group}_b"):
                 if name in self._labels:
@@ -533,16 +541,26 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         finally:
             self._is_internal_update = False
 
-    def update_grid(self, result: SolveResult | None, axis1: str = "X", axis2: str = "Z") -> None:
+    def update_grid(
+        self,
+        result: SolveResult | None,
+        axis1: str = "X",
+        axis2: str = "Z",
+        *,
+        refresh_lines: bool = True,
+    ) -> None:
         """Draw a perspective grid on the ground plane if the solve is valid."""
         self._last_grid_result = result
         self._last_grid_axes = (axis1, axis2)
         self._refresh_canvas_rect()
-        self._update_lines()
+        if refresh_lines:
+            self._update_lines()
 
-        # Clear existing grid and box lines
-        while self._grid_lines:
-            self._scene.removeItem(self._grid_lines.pop())
+        # Reuse grid items across live solves. Recreating every QGraphicsItem on
+        # each dragged pixel is substantially more expensive than updating the
+        # small fixed pool's geometry and visibility.
+        for line in self._grid_lines:
+            line.setVisible(False)
         while self._box_lines:
             self._scene.removeItem(self._box_lines.pop())
 
@@ -614,7 +632,10 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             )
             return (first, crossing) if first_front else (crossing, second)
 
+        grid_line_index = 0
+
         def add_grid_line(first, second) -> None:
+            nonlocal grid_line_index
             clipped = near_clip(first, second)
             if clipped is None:
                 return
@@ -628,9 +649,15 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             bounded = _clip_segment_to_rect(start, end, self._canvas_rect)
             if bounded is None:
                 return
-            line = self._scene.addLine(QtCore.QLineF(*bounded), pen)
-            line.setZValue(0.5)
-            self._grid_lines.append(line)
+            if grid_line_index < len(self._grid_lines):
+                line = self._grid_lines[grid_line_index]
+                line.setLine(QtCore.QLineF(*bounded))
+            else:
+                line = self._scene.addLine(QtCore.QLineF(*bounded), pen)
+                line.setZValue(0.5)
+                self._grid_lines.append(line)
+            line.setVisible(True)
+            grid_line_index += 1
 
         # The overlay is always Nuke's horizontal ground plane: X/Z. The VP
         # dropdowns describe marked scene directions and may include world-up Y.
@@ -824,7 +851,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         """Pull the Origin onto the nearest target within the screen threshold."""
         if self._is_internal_update or not self._snap_enabled:
             return
-        targets = self._collect_snap_targets()
+        targets = self._origin_snap_targets
+        if targets is None:
+            targets = self._collect_snap_targets()
         if not targets:
             return
         origin = self._handles["origin"]
@@ -841,6 +870,13 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             origin.setPos(target[0], target[1])
         finally:
             self._is_internal_update = False
+
+    def _cache_origin_snap_targets(self) -> None:
+        """Freeze snap candidates for the duration of one Origin drag."""
+        self._origin_snap_targets = self._collect_snap_targets() if self._snap_enabled else None
+
+    def _clear_origin_snap_targets(self) -> None:
+        self._origin_snap_targets = None
 
     def _hud_slider_style(self) -> str:
         """Compact horizontal slider styled to match the HUD buttons."""
