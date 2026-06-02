@@ -7,6 +7,16 @@ from collections.abc import Iterable
 from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Point2D, Segment2D
 
 
+# The accumulated normal matrix is positive semi-definite and, for two
+# unit-normal lines, its determinant equals sin^2(theta) of the angle between
+# them. A 1e-6 floor rejects angular spreads narrower than ~0.06 degrees, where
+# the recovered intersection is dominated by handle-marking noise rather than
+# the real vanishing point. This is intentionally far stricter than
+# DEFAULT_TOLERANCE, which would silently accept near-parallel lines and return
+# a wildly unstable point.
+MIN_INTERSECTION_DETERMINANT = 1e-6
+
+
 def line_intersection(
     first: Segment2D,
     second: Segment2D,
@@ -62,8 +72,11 @@ def line_intersection_least_squares(
         normal_y_rhs += normal_y * rhs
 
     determinant = normal_x_squared * normal_y_squared - normal_xy * normal_xy
-    if abs(determinant) <= tolerance:
-        raise GeometryError("Cannot intersect parallel or nearly parallel lines.")
+    if determinant <= MIN_INTERSECTION_DETERMINANT:
+        raise GeometryError(
+            "Vanishing-point lines are too close to parallel; their intersection "
+            "is numerically unstable. Mark lines that diverge more clearly."
+        )
     return Point2D(
         (normal_x_rhs * normal_y_squared - normal_xy * normal_y_rhs) / determinant,
         (normal_x_squared * normal_y_rhs - normal_xy * normal_x_rhs) / determinant,

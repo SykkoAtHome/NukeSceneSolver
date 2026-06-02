@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import atan, isfinite, sqrt
 
-from scene_solver.core.axes import parse_world_axis
+from scene_solver.core.axes import flipped_world_axis, parse_world_axis
 from scene_solver.core.coordinates import (
     DEFAULT_PRINCIPAL_POINT,
     ImageDimensions,
@@ -63,6 +63,7 @@ class SolveInput:
     camera_distance: float = DEFAULT_CAMERA_DISTANCE
     reference_distance: ReferenceDistanceInput | None = None
     mode: str = "2vp"
+    orient_axes_by_segments: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,6 +139,28 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             dimensions,
             principal_point,
         )
+
+        if solve_input.orient_axes_by_segments:
+            first_axis, first_ambiguous = _orient_axis_by_segments(
+                solve_input.first_axis,
+                solve_input.vp1_segments,
+                solver_to_ui(first_vp_solver, dimensions, principal_point),
+            )
+            second_axis, second_ambiguous = _orient_axis_by_segments(
+                solve_input.second_axis,
+                solve_input.vp2_segments,
+                solver_to_ui(second_vp_solver, dimensions, principal_point),
+            )
+            if first_ambiguous:
+                warnings.append(
+                    f"Arrow directions for the {solve_input.first_axis.strip('+-').upper()} "
+                    "axis are inconsistent; using the selected sign."
+                )
+            if second_ambiguous:
+                warnings.append(
+                    f"Arrow directions for the {solve_input.second_axis.strip('+-').upper()} "
+                    "axis are inconsistent; using the selected sign."
+                )
 
         focal_plane_squared = -(
             first_vp_solver.x * second_vp_solver.x
@@ -340,6 +363,36 @@ def _ui_segment_to_solver(
         ui_to_solver(segment.start, dimensions, principal_point),
         ui_to_solver(segment.end, dimensions, principal_point),
     )
+
+
+def _orient_axis_by_segments(
+    axis: str,
+    segments: tuple[Segment2D, ...],
+    vanishing_point_ui: Point2D,
+) -> tuple[tuple[int, float], bool]:
+    """Resolve an axis sign from drawn segment directions.
+
+    A segment whose drawn direction (start -> end) points toward its vanishing
+    point runs along the positive world axis; one pointing away runs along the
+    negative axis. Summing ``direction . to_vanishing_point`` over the group
+    yields a signed score. Returns the parsed (index, sign) axis and whether the
+    direction was ambiguous (segments cancelling out), so the caller can warn
+    and fall back to the user's selected sign. The dot-product sign is invariant
+    under the UI y-flip, so UI-space inputs are fine here.
+    """
+
+    score = 0.0
+    for segment in segments:
+        try:
+            direction = segment.direction().normalized()
+            to_vanishing_point = (vanishing_point_ui - segment.start).normalized()
+        except GeometryError:
+            continue
+        score += direction.dot(to_vanishing_point)
+    if abs(score) <= DEFAULT_TOLERANCE:
+        return parse_world_axis(axis), True
+    chosen = axis if score > 0.0 else flipped_world_axis(axis)
+    return parse_world_axis(chosen), False
 
 
 def _world_to_camera_columns(

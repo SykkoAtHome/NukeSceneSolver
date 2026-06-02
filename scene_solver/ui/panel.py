@@ -11,6 +11,7 @@ from scene_solver.core import (
     BoxDimensionInput,
     DEFAULT_PRINCIPAL_POINT,
     GeometryError,
+    Point2D,
     SolveInput,
     SolveResult,
     reconstruct_match_box,
@@ -422,6 +423,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
             known_focal_length_mm=self._focal_length.value() if mode_str == "1vp" else None,
             camera_distance=self._camera_distance.value(),
             mode=mode_str,
+            # In VP mode the drawn arrow directions resolve each axis sign (and
+            # the mirror ambiguity). Box mode runs its own orientation plus an
+            # above-ground correction, so it must not be re-oriented here.
+            orient_axes_by_segments=(mode_str != "box"),
         )
         scale_error = None
         mode = self._canvas.mode()
@@ -458,19 +463,20 @@ class SceneSolverPanel(QtWidgets.QWidget):
         elif self._last_result.ok:
             assert self._last_result.focal_length_mm is not None
             assert self._last_result.horizontal_fov_radians is not None
-            warnings = " ".join(self._last_result.warnings)
-            scale_status = ""
+            parts = [
+                f"Ready. Focal: {self._last_result.focal_length_mm:.3f} mm, "
+                f"horizontal FOV: {degrees(self._last_result.horizontal_fov_radians):.2f} deg."
+            ]
             if self._last_box_dimension is not None:
-                scale_status = (
-                    " Scene scale: estimated from match-box "
+                parts.append(
+                    "Scene scale: estimated from match-box "
                     f"{self._last_box_dimension.axis} = "
                     f"{self._last_box_dimension.length:g} world units."
                 )
-            self._message.setText(
-                f"Ready. Focal: {self._last_result.focal_length_mm:.3f} mm, "
-                f"horizontal FOV: {degrees(self._last_result.horizontal_fov_radians):.2f} deg. "
-                f"{scale_status} {warnings}"
-            )
+            warnings = " ".join(self._last_result.warnings)
+            if warnings:
+                parts.append(warnings)
+            self._message.setText(" ".join(parts))
             self._message.setStyleSheet("color: #c6e6c6;")
         else:
             self._show_error(" ".join(self._last_result.errors))

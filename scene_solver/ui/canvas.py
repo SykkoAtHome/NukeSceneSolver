@@ -12,12 +12,18 @@ from scene_solver.core import (
     box_axis_segments,
     world_axis_index,
 )
-from scene_solver.core.models import Point2D, Segment2D, Vector3D
-from scene_solver.core.coordinates import ui_to_solver
-from scene_solver.core.projection import solver_point_to_camera_ray
+from scene_solver.core.models import Point2D, Segment2D
 
 
 HANDLE_RADIUS = 8.0
+
+# Axis-direction triad drawn from the box origin corner in Box mode:
+# (arrow key, origin corner, destination corner, color matching the dest corner).
+BOX_TRIAD = (
+    ("box_triad_x", "box_v000", "box_v100", "#ff5c5c"),
+    ("box_triad_z", "box_v000", "box_v010", "#5ca8ff"),
+    ("box_triad_y", "box_v000", "box_v001", "#5cff5c"),
+)
 
 DEFAULT_POSITIONS = {
     "vp1_a_start": Point2D(0.12, 0.23),
@@ -142,6 +148,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         # State
         self._grid_visible = True
         self._horizon_visible = True
+        self._extend_visible = False
         self._reference_visible = False
         self._mode = "lines"
         self._undo_buffer: dict[str, Point2D] | None = None
@@ -155,6 +162,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._100_btn = None
         self._grid_btn = None
         self._horizon_btn = None
+        self._extend_btn = None
         self._reset_btn = None
         self._hud_style = ""
         
@@ -180,6 +188,8 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         # Labels and Lines containers
         self._handles: dict[str, _HandleItem] = {}
         self._lines: dict[str, QtWidgets.QGraphicsLineItem] = {}
+        self._extension_lines: dict[str, QtWidgets.QGraphicsLineItem] = {}
+        self._arrows: dict[str, QtWidgets.QGraphicsPolygonItem] = {}
         self._labels: dict[str, QtWidgets.QGraphicsSimpleTextItem] = {}
         self._grid_lines: list[QtWidgets.QGraphicsLineItem] = []
         self._box_lines: list[QtWidgets.QGraphicsLineItem] = []
@@ -244,6 +254,20 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 line.setZValue(1.5)
                 line.setVisible(False)
                 self._lines[name] = line
+                self._extension_lines[name] = self._make_extension_line(
+                    QtGui.QColor(255, 255, 255, 90)
+                )
+
+            # Box origin-corner axis triad arrowheads (informational orientation
+            # gizmo; Box mode resolves the actual sign internally).
+            for key, _origin, _dest, color in BOX_TRIAD:
+                arrow = QtWidgets.QGraphicsPolygonItem()
+                arrow.setBrush(QtGui.QBrush(QtGui.QColor(color)))
+                arrow.setPen(QtCore.Qt.NoPen)
+                arrow.setZValue(2.5)
+                arrow.setVisible(False)
+                self._scene.addItem(arrow)
+                self._arrows[key] = arrow
         finally:
             self._is_internal_update = False
             
@@ -375,30 +399,6 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             for line in self._pp_lines:
                 line.setVisible(visible)
 
-    def _unproject_length(self, ui_point: Point2D, world_axis: Vector3D, result: SolveResult) -> float:
-        solver_pt = ui_to_solver(ui_point, result.image_dimensions, result.principal_point_ui)
-        focal_plane_dist = result.relative_focal_length / 2.0
-        try:
-            camera_ray = solver_point_to_camera_ray(solver_pt, focal_plane_dist)
-        except ValueError:
-            return 0.0
-        world_ray = result.camera_to_world_matrix.transform_direction(camera_ray).normalized()
-
-        C = result.camera_position
-        C_cross_R = C.cross(world_ray)
-        D_cross_R = world_axis.cross(world_ray)
-        denom = D_cross_R.dot(D_cross_R)
-        if denom < 1e-9:
-            return 0.0
-        return C_cross_R.dot(D_cross_R) / denom
-
-    def _get_axis_vector(self, axis_str: str) -> Vector3D:
-        name = axis_str.strip("+-")
-        sign = -1.0 if "-" in axis_str else 1.0
-        if name == "X": return Vector3D(sign, 0.0, 0.0)
-        if name == "Y": return Vector3D(0.0, sign, 0.0)
-        return Vector3D(0.0, 0.0, sign)
-
     def set_principal_point(self, point: Point2D) -> None:
         """Update the principal-point handle without emitting an intermediate solve."""
 
@@ -432,7 +432,10 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 row = proj.rows[i]
                 for j in range(4):
                     out[i] += row[j] * p[j]
-            if abs(out[3]) < 1e-6: return None
+            # out[3] is the camera-space z of the world point. The camera looks
+            # down -Z, so points in front are strictly negative; cull anything
+            # at or behind the image plane to avoid mirrored grid lines.
+            if out[3] > -1e-6: return None
             nx = out[0] / out[3]
             ny = out[1] / out[3]
             
@@ -527,15 +530,26 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._horizon_btn.setChecked(True)
         self._horizon_btn.setStyleSheet(self._hud_style)
         self._horizon_btn.clicked.connect(self.toggle_horizon)
-        
+
+        self._extend_btn = QtWidgets.QPushButton("Extend")
+        self._extend_btn.setCheckable(True)
+        self._extend_btn.setChecked(self._extend_visible)
+        self._extend_btn.setToolTip(
+            "Extend visible VP lines and box edges to the image borders "
+            "(dashed prolongation beyond the handles)."
+        )
+        self._extend_btn.setStyleSheet(self._hud_style)
+        self._extend_btn.clicked.connect(self.toggle_extend)
+
         self._reset_btn = QtWidgets.QPushButton("Reset")
         self._reset_btn.setStyleSheet(self._hud_style)
         self._reset_btn.clicked.connect(self.reset_handles)
-        
+
         hud_layout.addWidget(self._fit_btn)
         hud_layout.addWidget(self._100_btn)
         hud_layout.addWidget(self._grid_btn)
         hud_layout.addWidget(self._horizon_btn)
+        hud_layout.addWidget(self._extend_btn)
         hud_layout.addWidget(self._reset_btn)
 
     def toggle_grid(self) -> None:
@@ -554,6 +568,13 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._horizon_line.setVisible(
             self._horizon_visible and not self._horizon_line.line().isNull()
         )
+
+    def toggle_extend(self) -> None:
+        """Toggle dashed extension of visible VP lines and box edges."""
+        self._extend_visible = not self._extend_visible
+        if self._extend_btn:
+            self._extend_btn.setChecked(self._extend_visible)
+        self._update_lines()
 
     def reset_handles(self) -> None:
         """Reset handles to defaults or undo the last reset."""
@@ -664,9 +685,6 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
     def principal_point(self) -> Point2D:
         return self._handles["principal_point"].relative_position()
 
-    def reference_segment(self) -> Segment2D:
-        return self._segment("reference")
-
     def match_box_corners(self) -> dict[str, Point2D]:
         return {
             name: self._handles[name].relative_position()
@@ -692,7 +710,19 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         line = self._scene.addLine(QtCore.QLineF(), pen)
         line.setZValue(2.0)
         self._lines[name] = line
-        
+        self._extension_lines[name] = self._make_extension_line(QtGui.QColor(color))
+
+        # Direction arrowhead pointing start -> end, above the line but below the
+        # handles. Filled triangle, sized in scene units so it stays a constant
+        # size on screen regardless of zoom (see _set_arrow_head).
+        arrow = QtWidgets.QGraphicsPolygonItem()
+        arrow.setBrush(QtGui.QBrush(QtGui.QColor(color)))
+        arrow.setPen(QtCore.Qt.NoPen)
+        arrow.setZValue(2.5)
+        arrow.setVisible(False)
+        self._scene.addItem(arrow)
+        self._arrows[name] = arrow
+
         label = QtWidgets.QGraphicsSimpleTextItem("?")
         label.setBrush(QtGui.QBrush(QtGui.QColor(color)))
         label.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
@@ -712,6 +742,73 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         handle.signals.moved.connect(self._handle_moved)
         self._scene.addItem(handle)
         return handle
+
+    def _make_extension_line(self, color: QtGui.QColor) -> QtWidgets.QGraphicsLineItem:
+        """Create a hidden dashed line that prolongs a construction line.
+
+        Drawn just below the solid line (zValue 1.8 < 2.0) so the solid segment
+        between the handles masks the middle, leaving only the dashed extension
+        beyond the handles visible when "Extend" is enabled.
+        """
+        pen = QtGui.QPen(color, 1.0, QtCore.Qt.DashLine)
+        pen.setCosmetic(True)
+        line = self._scene.addLine(QtCore.QLineF(), pen)
+        line.setZValue(1.8)
+        line.setVisible(False)
+        return line
+
+    def _set_extension(
+        self,
+        name: str,
+        first: QtCore.QPointF,
+        second: QtCore.QPointF,
+        base_visible: bool,
+    ) -> None:
+        """Update one line's dashed extension, clipped to the plate edges."""
+        item = self._extension_lines.get(name)
+        if item is None:
+            return
+        if not (self._extend_visible and base_visible):
+            item.setVisible(False)
+            return
+        clipped = self._clip_infinite_line_to_plate(first, second)
+        if clipped is None:
+            item.setVisible(False)
+            return
+        item.setLine(QtCore.QLineF(*clipped))
+        item.setVisible(True)
+
+    def _hide_arrow(self, name: str) -> None:
+        item = self._arrows.get(name)
+        if item is not None:
+            item.setVisible(False)
+
+    def _set_arrow_head(
+        self,
+        name: str,
+        tip: QtCore.QPointF,
+        dx: float,
+        dy: float,
+        length: float,
+        inv_scale: float,
+    ) -> None:
+        """Point a constant-size filled arrowhead from start -> end at ``tip``."""
+        item = self._arrows.get(name)
+        if item is None:
+            return
+        if length <= 1e-9:
+            item.setVisible(False)
+            return
+        unit_x, unit_y = dx / length, dy / length
+        size = 12.0 * inv_scale
+        half_width = size * 0.5
+        base_x = tip.x() - unit_x * size
+        base_y = tip.y() - unit_y * size
+        normal_x, normal_y = -unit_y, unit_x
+        barb1 = QtCore.QPointF(base_x + normal_x * half_width, base_y + normal_y * half_width)
+        barb2 = QtCore.QPointF(base_x - normal_x * half_width, base_y - normal_y * half_width)
+        item.setPolygon(QtGui.QPolygonF([QtCore.QPointF(tip), barb1, barb2]))
+        item.setVisible(True)
 
     def _handle_moved(self) -> None:
         if not self._is_internal_update:
@@ -776,12 +873,37 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         for i, (v1, v2) in enumerate(BOX_EDGES):
             name = f"box_edge_{i}"
             if name in self._lines:
-                if is_box:
-                    if v1 in self._handles and v2 in self._handles:
-                        self._lines[name].setLine(QtCore.QLineF(self._handles[v1].pos(), self._handles[v2].pos()))
-                        self._lines[name].setVisible(True)
+                if is_box and v1 in self._handles and v2 in self._handles:
+                    p1 = self._handles[v1].pos()
+                    p2 = self._handles[v2].pos()
+                    self._lines[name].setLine(QtCore.QLineF(p1, p2))
+                    self._lines[name].setVisible(True)
+                    self._set_extension(name, p1, p2, True)
                 else:
                     self._lines[name].setVisible(False)
+                    self._set_extension(name, QtCore.QPointF(), QtCore.QPointF(), False)
+
+        # 1b. Box origin-corner axis triad (3 direction arrows, Box mode only)
+        inv_scale = 1.0 / self.transform().m11()
+        for key, origin_name, dest_name, _color in BOX_TRIAD:
+            if is_box and origin_name in self._handles and dest_name in self._handles:
+                origin_pos = self._handles[origin_name].pos()
+                dest_pos = self._handles[dest_name].pos()
+                dx = dest_pos.x() - origin_pos.x()
+                dy = dest_pos.y() - origin_pos.y()
+                length = (dx * dx + dy * dy) ** 0.5
+                scene_offset = HANDLE_RADIUS * inv_scale
+                if length > scene_offset * 2.0:
+                    unit_x, unit_y = dx / length, dy / length
+                    tip = QtCore.QPointF(
+                        dest_pos.x() - unit_x * scene_offset,
+                        dest_pos.y() - unit_y * scene_offset,
+                    )
+                    self._set_arrow_head(key, tip, dx, dy, length, inv_scale)
+                else:
+                    self._hide_arrow(key)
+            else:
+                self._hide_arrow(key)
 
         # 2. Update Standard VP Lines visibility and positions
         is_3vp = (getattr(self, "_mode", "2vp") == "3vp")
@@ -790,15 +912,21 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 continue
             if name == "reference" and not self._reference_visible:
                 line.setVisible(False)
+                self._set_extension(name, QtCore.QPointF(), QtCore.QPointF(), False)
+                self._hide_arrow(name)
                 continue
             # Hide manual VP lines entirely in box mode. Reference line remains editable.
             if is_box and name in ("vp1_a", "vp1_b", "vp2_a", "vp2_b", "vp3_a", "vp3_b"):
                 line.setVisible(False)
+                self._set_extension(name, QtCore.QPointF(), QtCore.QPointF(), False)
+                self._hide_arrow(name)
                 continue
-            
+
             # VP3 lines only visible in 3VP mode
             if name.startswith("vp3") and not is_3vp:
                 line.setVisible(False)
+                self._set_extension(name, QtCore.QPointF(), QtCore.QPointF(), False)
+                self._hide_arrow(name)
                 continue
 
             if f"{name}_start" not in self._handles or f"{name}_end" not in self._handles:
@@ -819,6 +947,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 rect = label.boundingRect()
                 label.setPos(center.x() - rect.width() * 0.5, center.y() - rect.height() * 0.5)
             
+            visible = False
             if length > HANDLE_RADIUS * 2.0:
                 inv_scale = 1.0 / self.transform().m11()
                 scene_offset = HANDLE_RADIUS * inv_scale
@@ -828,10 +957,15 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                     p2_offset = QtCore.QPointF(p2.x() - dx * ratio, p2.y() - dy * ratio)
                     line.setLine(QtCore.QLineF(p1_offset, p2_offset))
                     line.setVisible(True)
+                    visible = True
+                    self._set_arrow_head(name, p2_offset, dx, dy, length, inv_scale)
                 else:
                     line.setVisible(False)
             else:
                 line.setVisible(False)
+            if not visible:
+                self._hide_arrow(name)
+            self._set_extension(name, p1, p2, visible)
 
     def _segments(self, *names: str) -> tuple[Segment2D, Segment2D]:
         return tuple(self._segment(name) for name in names)  # type: ignore[return-value]
