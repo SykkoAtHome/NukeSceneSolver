@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import sqrt
+
 from scene_solver.core.models import DEFAULT_TOLERANCE, GeometryError, Matrix4, Point2D, Vector3D
 
 
@@ -47,3 +49,39 @@ def solver_projection_matrix(
         )
     )
     return camera_to_solver @ world_to_camera_matrix
+
+
+def world_plane_horizon_solver_line(
+    projection_matrix: Matrix4,
+    first_axis_index: int,
+    second_axis_index: int,
+    tolerance: float = DEFAULT_TOLERANCE,
+) -> tuple[float, float, float]:
+    """Return ``a, b, c`` for a projected world plane's solver-space horizon."""
+
+    if (
+        first_axis_index not in (0, 1, 2)
+        or second_axis_index not in (0, 1, 2)
+        or first_axis_index == second_axis_index
+    ):
+        raise GeometryError("A world plane requires two different axis indices.")
+
+    vanishing_points = []
+    for axis_index in (first_axis_index, second_axis_index):
+        direction = [0.0, 0.0, 0.0, 0.0]
+        direction[axis_index] = 1.0
+        vanishing_points.append(
+            tuple(
+                sum(projection_matrix.rows[row][column] * direction[column] for column in range(4))
+                for row in (0, 1, 3)
+            )
+        )
+
+    first, second = vanishing_points
+    a = first[1] * second[2] - first[2] * second[1]
+    b = first[2] * second[0] - first[0] * second[2]
+    c = first[0] * second[1] - first[1] * second[0]
+    normal_length = sqrt(a * a + b * b)
+    if normal_length <= tolerance:
+        raise GeometryError("Could not project the world-plane horizon.")
+    return a / normal_length, b / normal_length, c / normal_length

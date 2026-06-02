@@ -43,6 +43,7 @@ from scene_solver.ui.canvas import SceneSolverCanvas
 AXES = ("X", "Y", "Z")
 ARBITRARY_SCALE_MODE = "Arbitrary camera distance"
 BOX_DIMENSION_SCALE_MODE = "Estimated match-box dimension"
+DIRECTED_VP_LINES_STATE_VERSION = 1
 
 
 class SceneSolverPanel(QtWidgets.QWidget):
@@ -619,7 +620,10 @@ class SceneSolverPanel(QtWidgets.QWidget):
             
             # Restore Canvas state
             if "canvas" in state:
-                self._canvas.set_state(state["canvas"])
+                canvas_state = state["canvas"]
+                if state.get("directed_vp_lines_version") != DIRECTED_VP_LINES_STATE_VERSION:
+                    canvas_state = _migrate_legacy_canvas_directions(canvas_state)
+                self._canvas.set_state(canvas_state)
         except (KeyError, TypeError, ValueError):
             return
 
@@ -643,6 +647,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
             "box_dimension_axis": self._box_dimension_axis.currentText(),
             "box_dimension_length": self._box_dimension_length.value(),
             "match_box_base_offset": self._match_box_base_offset.value(),
+            "directed_vp_lines_version": DIRECTED_VP_LINES_STATE_VERSION,
             "canvas": self._canvas.get_state(),
         }
         save_state(state)
@@ -712,3 +717,15 @@ class SceneSolverPanel(QtWidgets.QWidget):
     def _require_scene_scale(self) -> None:
         if self._uses_box_dimension() and self._last_box_dimension is None:
             raise GeometryError("Could not estimate scene scale from the current match box.")
+
+
+def _migrate_legacy_canvas_directions(
+    canvas_state: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Choose the Nuke-upright mirror when old saved lines had no direction contract."""
+    migrated = {name: dict(position) for name, position in canvas_state.items()}
+    for line in ("vp2_a", "vp2_b"):
+        start, end = f"{line}_start", f"{line}_end"
+        if start in migrated and end in migrated:
+            migrated[start], migrated[end] = migrated[end], migrated[start]
+    return migrated

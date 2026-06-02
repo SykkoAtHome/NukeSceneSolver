@@ -7,10 +7,13 @@ from PySide2 import QtCore, QtGui, QtWidgets
 from scene_solver.core import (
     BOX_CORNER_NAMES,
     BOX_EDGES,
+    GeometryError,
     SolveResult,
     box_axis_segments,
 )
+from scene_solver.core.coordinates import solver_to_ui
 from scene_solver.core.models import Point2D, Segment2D
+from scene_solver.core.projection import world_plane_horizon_solver_line
 from scene_solver.ui.axis_display import axis_arrow_heading, axis_color
 
 
@@ -73,14 +76,14 @@ DEFAULT_POSITIONS = {
     "vp1_a_end": Point2D(0.77, 0.34),
     "vp1_b_start": Point2D(0.20, 0.70),
     "vp1_b_end": Point2D(0.95, 0.59),
-    "vp2_a_start": Point2D(0.30, 0.40),
-    "vp2_a_end": Point2D(0.25, 0.14),
-    "vp2_b_start": Point2D(0.80, 0.80),
-    "vp2_b_end": Point2D(0.61, 0.21),
-    "vp3_a_start": Point2D(0.5, 0.4),
-    "vp3_a_end": Point2D(0.5, 0.1),
-    "vp3_b_start": Point2D(0.4, 0.4),
-    "vp3_b_end": Point2D(0.4, 0.1),
+    "vp2_a_start": Point2D(0.25, 0.14),
+    "vp2_a_end": Point2D(0.30, 0.40),
+    "vp2_b_start": Point2D(0.61, 0.21),
+    "vp2_b_end": Point2D(0.80, 0.80),
+    "vp3_a_start": Point2D(0.35, 0.70),
+    "vp3_a_end": Point2D(0.4964, 0.3765),
+    "vp3_b_start": Point2D(0.55, 0.80),
+    "vp3_b_end": Point2D(0.7464, 0.5015),
     "origin": Point2D(0.5, 0.5),
     "principal_point": Point2D(0.5, 0.5),
     "reference_start": Point2D(0.50, 0.50),
@@ -368,6 +371,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
     def set_mode(self, mode: str) -> None:
         self._mode = mode
         is_box = (mode == "box")
+        is_1vp = (mode == "1vp")
         is_3vp = (mode == "3vp")
         
         # Standard VP handles and labels (Origin always visible)
@@ -377,6 +381,8 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             if name in self._handles:
                 if name.startswith("vp3"):
                     self._handles[name].setVisible(is_3vp)
+                elif name.startswith("vp2_b"):
+                    self._handles[name].setVisible(not is_box and not is_1vp)
                 else:
                     self._handles[name].setVisible(not is_box)
         
@@ -387,12 +393,16 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             if name in self._labels:
                 if name.startswith("vp3"):
                     self._labels[name].setVisible(is_3vp)
+                elif name.startswith("vp2_b"):
+                    self._labels[name].setVisible(not is_box and not is_1vp)
                 else:
                     self._labels[name].setVisible(not is_box)
             if name in self._lines:
                 if not name.startswith("box_edge"):
                     if name.startswith("vp3"):
                         self._lines[name].setVisible(is_3vp)
+                    elif name.startswith("vp2_b"):
+                        self._lines[name].setVisible(not is_box and not is_1vp)
                     else:
                         self._lines[name].setVisible(not is_box)
                 
@@ -433,6 +443,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 if name in self._labels:
                     self._labels[name].setText(f"{axis.strip('+-')} Axis")
             self._recolor_group(group, axis_color(axis))
+        if self._mode == "1vp":
+            self._labels["vp2_a"].setText("Horizon")
+            self._recolor_group("vp2", "#ffcc66")
         self._update_lines()
 
     def _recolor_group(self, group: str, color: str) -> None:
@@ -1054,6 +1067,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                 self._hide_arrow(key)
 
         # 2. Update Standard VP Lines visibility and positions
+        is_1vp = (getattr(self, "_mode", "2vp") == "1vp")
         is_3vp = (getattr(self, "_mode", "2vp") == "3vp")
         for name, line in self._lines.items():
             if name.startswith("box_edge_"):
@@ -1072,6 +1086,11 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
 
             # VP3 lines only visible in 3VP mode
             if name.startswith("vp3") and not is_3vp:
+                line.setVisible(False)
+                self._set_extension(name, QtCore.QPointF(), QtCore.QPointF(), False)
+                self._hide_arrow(name)
+                continue
+            if name == "vp2_b" and is_1vp:
                 line.setVisible(False)
                 self._set_extension(name, QtCore.QPointF(), QtCore.QPointF(), False)
                 self._hide_arrow(name)
@@ -1106,7 +1125,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
                     line.setLine(QtCore.QLineF(p1_offset, p2_offset))
                     line.setVisible(True)
                     visible = True
-                    if name.startswith("vp"):
+                    if is_1vp and name == "vp2_a":
+                        self._hide_arrow(name)
+                    elif name.startswith("vp"):
                         self._set_axis_arrow(name, p2_offset, p1, p2, inv_scale)
                     else:
                         self._set_arrow_head(name, p2_offset, dx, dy, length, inv_scale)
@@ -1162,6 +1183,8 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
     def vp2_segments(self) -> tuple[Segment2D, ...]:
         if getattr(self, "_mode", "lines") == "box":
             return box_axis_segments(self.match_box_corners(), 1)
+        if getattr(self, "_mode", "lines") == "1vp":
+            return (self._segment("vp2_a"),)
         return self._segments("vp2_a", "vp2_b")
 
     def vp3_segments(self) -> tuple[Segment2D, ...]:
@@ -1170,16 +1193,30 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         return self._segments("vp3_a", "vp3_b")
 
     def _update_horizon(self, result: SolveResult | None) -> None:
-        if not result or not result.ok:
+        if (
+            not result
+            or not result.ok
+            or result.projection_matrix is None
+            or result.image_dimensions is None
+        ):
             self._horizon_line.setVisible(False)
             return
-        first, second, _ = result.vanishing_points_ui
-        if first is None or second is None:
+        try:
+            a, b, c = world_plane_horizon_solver_line(result.projection_matrix, 0, 2)
+            if abs(b) >= abs(a):
+                first_solver = Point2D(-0.5, -(-0.5 * a + c) / b)
+                second_solver = Point2D(0.5, -(0.5 * a + c) / b)
+            else:
+                first_solver = Point2D(-(-0.5 * b + c) / a, -0.5)
+                second_solver = Point2D(-(0.5 * b + c) / a, 0.5)
+        except (GeometryError, ZeroDivisionError):
             self._horizon_line.setVisible(False)
             return
 
         width = self._plate_rect.width()
         height = self._plate_rect.height()
+        first = solver_to_ui(first_solver, result.image_dimensions, result.principal_point_ui)
+        second = solver_to_ui(second_solver, result.image_dimensions, result.principal_point_ui)
         first_point = QtCore.QPointF(
             self._plate_rect.left() + first.x * width,
             self._plate_rect.top() + first.y * height,

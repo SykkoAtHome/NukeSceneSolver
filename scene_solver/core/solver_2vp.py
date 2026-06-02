@@ -11,7 +11,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import atan, isfinite, sqrt
 
-from scene_solver.core.axes import missing_world_axis, normalized_world_axis_name, parse_world_axis
+from scene_solver.core.axes import (
+    missing_world_axis,
+    normalized_world_axis_name,
+    parse_world_axis,
+    world_axis_index,
+)
 from scene_solver.core.coordinates import (
     DEFAULT_PRINCIPAL_POINT,
     ImageDimensions,
@@ -25,6 +30,7 @@ from scene_solver.core.models import (
     Matrix4,
     Point2D,
     Segment2D,
+    Vector2D,
     Vector3D,
 )
 from scene_solver.core.projection import (
@@ -112,34 +118,38 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
         preserve_sign = solve_input.mode == "box"
         first_axis_name = _solve_axis_name(solve_input.first_axis, preserve_sign=preserve_sign)
         second_axis_name = _solve_axis_name(solve_input.second_axis, preserve_sign=preserve_sign)
-        first_axis = parse_world_axis(first_axis_name)
-        second_axis = parse_world_axis(second_axis_name)
 
         if solve_input.mode == "1vp":
             return _solve_1vp(solve_input, dimensions)
 
-        if first_axis[0] == second_axis[0]:
+        if world_axis_index(first_axis_name) == world_axis_index(second_axis_name):
             raise GeometryError("The two vanishing points must map to different world axes.")
+        third_axis_letter: str | None = None
         if solve_input.mode == "3vp":
-            expected_third_axis = missing_world_axis(
+            expected_third_axis_letter = normalized_world_axis_name(missing_world_axis(
                 first_axis_name,
                 second_axis_name,
-            )
-            third_axis_name = _solve_axis_name(solve_input.third_axis, preserve_sign=False)
-            if parse_world_axis(third_axis_name) != parse_world_axis(expected_third_axis):
+            ))
+            third_axis_letter = normalized_world_axis_name(solve_input.third_axis)
+            if third_axis_letter != expected_third_axis_letter:
                 raise GeometryError(
-                    f"The third VP axis must be {expected_third_axis.strip('+-')} "
+                    f"The third VP axis must be {expected_third_axis_letter} "
                     "for a right-handed Nuke coordinate system."
                 )
 
         if solve_input.principal_point is None:
             if solve_input.vp3_segments:
-                principal_point = _solve_principal_point_3vp(
+                principal_point, third_vp_at_infinity = _solve_principal_point_3vp(
                     solve_input.vp1_segments,
                     solve_input.vp2_segments,
                     solve_input.vp3_segments,
                     dimensions,
                 )
+                if third_vp_at_infinity:
+                    warnings.append(
+                        "The third VP is at infinity; auto principal point is partially "
+                        "constrained. Assuming image center for its unresolved component."
+                    )
             else:
                 principal_point = DEFAULT_PRINCIPAL_POINT
 
@@ -153,28 +163,22 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             dimensions,
             principal_point,
         )
-        if solve_input.mode != "box":
-            _require_segments_point_toward_vp(
-                first_axis_name,
+        if solve_input.mode == "box":
+            first_axis_name = _solve_axis_name(solve_input.first_axis, preserve_sign=True)
+            second_axis_name = _solve_axis_name(solve_input.second_axis, preserve_sign=True)
+        else:
+            first_axis_name = _axis_oriented_by_segments(
+                solve_input.first_axis,
                 solve_input.vp1_segments,
                 solver_to_ui(first_vp_solver, dimensions, principal_point),
             )
-            _require_segments_point_toward_vp(
-                second_axis_name,
+            second_axis_name = _axis_oriented_by_segments(
+                solve_input.second_axis,
                 solve_input.vp2_segments,
                 solver_to_ui(second_vp_solver, dimensions, principal_point),
             )
-            if solve_input.mode == "3vp":
-                third_vp_solver = _intersect_ui_segments(
-                    solve_input.vp3_segments,
-                    dimensions,
-                    principal_point,
-                )
-                _require_segments_point_toward_vp(
-                    third_axis_name,
-                    solve_input.vp3_segments,
-                    solver_to_ui(third_vp_solver, dimensions, principal_point),
-                )
+        first_axis = parse_world_axis(first_axis_name)
+        second_axis = parse_world_axis(second_axis_name)
 
         focal_plane_squared = -(
             first_vp_solver.x * second_vp_solver.x
@@ -217,6 +221,16 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             third_vp_solver = None
             third_vp_ui = None
             warnings.append("The third vanishing point is at infinity.")
+        if solve_input.mode == "3vp":
+            assert third_axis_letter is not None
+            _validate_third_axis_segments(
+                third_axis_letter,
+                solve_input.vp3_segments,
+                dimensions=dimensions,
+                principal_point=principal_point,
+                focal_plane_distance=focal_plane_distance,
+                expected_camera_direction=third_camera_direction,
+            )
 
         return _finalize_result(
             solve_input,
@@ -249,13 +263,17 @@ def _solve_1vp(solve_input: SolveInput, dimensions: ImageDimensions) -> SolveRes
     
     first_vp_solver = _intersect_ui_segments(solve_input.vp1_segments, dimensions, principal_point)
     first_camera_direction = solver_point_to_camera_ray(first_vp_solver, focal_plane_distance)
-    first_axis_name = _solve_axis_name(solve_input.first_axis, preserve_sign=False)
-    _require_segments_point_toward_vp(
-        first_axis_name,
+    first_axis_name = _axis_oriented_by_segments(
+        solve_input.first_axis,
         solve_input.vp1_segments,
         solver_to_ui(first_vp_solver, dimensions, principal_point),
     )
     first_axis = parse_world_axis(first_axis_name)
+    if first_axis[0] == 1:
+        raise GeometryError(
+            "1VP mode requires an X or Z vanishing-point axis; "
+            "Y alone does not determine Nuke yaw."
+        )
     
     # Use VP2 segments to fit a horizon line.
     if not solve_input.vp2_segments:
@@ -301,22 +319,20 @@ def _one_vp_camera_to_world_rotation(
     """Recover rotation from one axis vanishing point and the ground horizon."""
 
     world_up_camera = first_horizon_ray.cross(second_horizon_ray).normalized()
+    if world_up_camera.y < 0.0:
+        world_up_camera = world_up_camera * -1.0
     primary_axis_idx = first_axis[0]
     primary_axis_dir = first_camera_direction * first_axis[1]
     columns = [Vector3D(0, 0, 0) for _ in range(3)]
     columns[primary_axis_idx] = primary_axis_dir
 
-    if primary_axis_idx == 1:
-        columns[0] = first_horizon_ray.normalized()
-        columns[2] = columns[0].cross(columns[1]).normalized()
+    columns[1] = world_up_camera
+    dot = columns[1].dot(columns[primary_axis_idx])
+    columns[1] = (columns[1] - columns[primary_axis_idx] * dot).normalized()
+    if primary_axis_idx == 0:
+        columns[2] = columns[0].cross(columns[1])
     else:
-        columns[1] = world_up_camera
-        dot = columns[1].dot(columns[primary_axis_idx])
-        columns[1] = (columns[1] - columns[primary_axis_idx] * dot).normalized()
-        if primary_axis_idx == 0:
-            columns[2] = columns[0].cross(columns[1])
-        else:
-            columns[0] = columns[1].cross(columns[2])
+        columns[0] = columns[1].cross(columns[2])
     return _camera_to_world_rotation((columns[0], columns[1], columns[2]))
 
 
@@ -325,12 +341,25 @@ def _solve_principal_point_3vp(
     vp2_segments: tuple[Segment2D, ...],
     vp3_segments: tuple[Segment2D, ...],
     dimensions: ImageDimensions,
-) -> Point2D:
+) -> tuple[Point2D, bool]:
     # Use image center as temporary principal point to find VPs in a stable solver space
     center = DEFAULT_PRINCIPAL_POINT
     v1 = _intersect_ui_segments(vp1_segments, dimensions, center)
     v2 = _intersect_ui_segments(vp2_segments, dimensions, center)
-    v3 = _intersect_ui_segments(vp3_segments, dimensions, center)
+    v3 = _optional_intersect_ui_segments(vp3_segments, dimensions, center)
+    if v3 is None:
+        heading = _average_ui_segment_heading_solver(vp3_segments, dimensions, center)
+        heading_offset = 0.5 * (
+            v1.x * heading.x
+            + v1.y * heading.y
+            + v2.x * heading.x
+            + v2.y * heading.y
+        )
+        partial_principal_point = Point2D(
+            heading.x * heading_offset,
+            heading.y * heading_offset,
+        )
+        return solver_to_ui(partial_principal_point, dimensions, center), True
 
     # Orthocenter O(x,y) equations:
     # (x - x1)(x2 - x3) + (y - y1)(y2 - y3) = 0
@@ -355,7 +384,7 @@ def _solve_principal_point_3vp(
     
     # O is in solver coordinates relative to image center.
     # Convert O back to UI coordinates.
-    return solver_to_ui(Point2D(ox, oy), dimensions, center)
+    return solver_to_ui(Point2D(ox, oy), dimensions, center), False
 
 
 def _validate_scalar(name: str, value: float) -> None:
@@ -371,23 +400,92 @@ def _solve_axis_name(axis: str, *, preserve_sign: bool) -> str:
     return f"+{letter}"
 
 
-def _require_segments_point_toward_vp(
+def _axis_oriented_by_segments(
     axis: str,
     segments: tuple[Segment2D, ...],
     vanishing_point: Point2D,
-) -> None:
-    """Require each directed VP line to point toward its shared vanishing point."""
+) -> str:
+    """Resolve the signed world axis from consistent directed VP lines."""
     letter = normalized_world_axis_name(axis)
+    orientation: bool | None = None
     for segment in segments:
         try:
             direction = segment.direction().normalized()
             to_vanishing_point = (vanishing_point - segment.start).normalized()
         except GeometryError as error:
             raise GeometryError(f"The {letter} VP lines must have a visible direction.") from error
-        if direction.dot(to_vanishing_point) <= DEFAULT_TOLERANCE:
+        score = direction.dot(to_vanishing_point)
+        if abs(score) <= DEFAULT_TOLERANCE:
             raise GeometryError(
-                f"The {letter} VP lines must point toward their vanishing point."
+                f"The {letter} VP lines must have a clear direction."
             )
+        points_toward_vp = score > 0.0
+        if orientation is not None and points_toward_vp != orientation:
+            raise GeometryError(
+                f"The {letter} VP lines must use a consistent direction."
+            )
+        orientation = points_toward_vp
+    if orientation is None:
+        raise GeometryError(f"The {letter} VP lines must be marked.")
+    return f"{'+' if orientation else '-'}{letter}"
+
+
+def _validate_third_axis_segments(
+    axis: str,
+    segments: tuple[Segment2D, ...],
+    *,
+    dimensions: ImageDimensions,
+    principal_point: Point2D,
+    focal_plane_distance: float,
+    expected_camera_direction: Vector3D,
+) -> None:
+    """Validate a finite or infinite third VP against the solved Nuke frame."""
+    _optional_intersect_ui_segments(segments, dimensions, principal_point)
+    letter = normalized_world_axis_name(axis)
+    expected_vanishing_point: Point2D | None
+    try:
+        expected_vanishing_point = solver_to_ui(
+            camera_direction_to_solver_point(expected_camera_direction, focal_plane_distance),
+            dimensions,
+            principal_point,
+        )
+    except GeometryError:
+        expected_vanishing_point = None
+        try:
+            expected_heading = Vector2D(
+                expected_camera_direction.x,
+                -expected_camera_direction.y / dimensions.height_relative_to_width,
+            ).normalized()
+        except GeometryError as error:
+            raise GeometryError(f"Could not resolve the projected {letter} axis direction.") from error
+
+    reference_heading: Vector2D | None = None
+    for segment in segments:
+        try:
+            heading = segment.direction().normalized()
+            if expected_vanishing_point is None:
+                desired_heading = expected_heading
+            else:
+                desired_heading = (expected_vanishing_point - segment.start).normalized()
+                if expected_camera_direction.z > 0.0:
+                    desired_heading = desired_heading * -1.0
+        except GeometryError as error:
+            raise GeometryError(f"The {letter} VP lines must have a visible direction.") from error
+
+        if reference_heading is not None and heading.dot(reference_heading) <= DEFAULT_TOLERANCE:
+            raise GeometryError(
+                f"The {letter} VP lines must use a consistent direction."
+            )
+        alignment = heading.dot(desired_heading)
+        if alignment <= DEFAULT_TOLERANCE:
+            raise GeometryError(
+                f"The {letter} VP lines point opposite to the solved Nuke axis direction."
+            )
+        if alignment < 0.995:
+            raise GeometryError(
+                f"The {letter} VP lines do not align with the solved Nuke axis direction."
+            )
+        reference_heading = heading
 
 
 def _intersect_ui_segments(
@@ -399,6 +497,43 @@ def _intersect_ui_segments(
         _ui_segment_to_solver(segment, dimensions, principal_point)
         for segment in segments
     )
+
+
+def _optional_intersect_ui_segments(
+    segments: tuple[Segment2D, ...],
+    dimensions: ImageDimensions,
+    principal_point: Point2D,
+) -> Point2D | None:
+    """Return a finite VP, or None when valid marked lines meet at infinity."""
+    if len(segments) < 2:
+        raise GeometryError("At least two line segments are required for intersection.")
+    if any(segment.length() <= DEFAULT_TOLERANCE for segment in segments):
+        raise GeometryError("Cannot intersect a line defined by a zero-length segment.")
+    try:
+        return _intersect_ui_segments(segments, dimensions, principal_point)
+    except GeometryError:
+        return None
+
+
+def _average_ui_segment_heading_solver(
+    segments: tuple[Segment2D, ...],
+    dimensions: ImageDimensions,
+    principal_point: Point2D,
+) -> Vector2D:
+    """Average an unoriented family of parallel UI lines in solver space."""
+    reference_heading: Vector2D | None = None
+    heading_sum = Vector2D(0.0, 0.0)
+    for segment in segments:
+        heading = _ui_segment_to_solver(segment, dimensions, principal_point).direction().normalized()
+        if reference_heading is None:
+            reference_heading = heading
+        elif heading.dot(reference_heading) < 0.0:
+            heading = heading * -1.0
+        heading_sum = heading_sum + heading
+    try:
+        return heading_sum.normalized()
+    except GeometryError as error:
+        raise GeometryError("Could not resolve the third VP direction at infinity.") from error
 
 
 def _ui_segment_to_solver(
