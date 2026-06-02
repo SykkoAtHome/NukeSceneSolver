@@ -111,12 +111,29 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._third_axis.addItems(AXES)
         self._third_axis.setCurrentText("Y")
         
-        self._auto_pp = QtWidgets.QCheckBox("Auto Principal Point (3VP only)")
+        self._auto_pp = QtWidgets.QCheckBox("Auto optical center (PP, 3VP only)")
         self._auto_pp.setChecked(True)
         
-        self._use_pp_offset = QtWidgets.QCheckBox("Adjust Principal Point")
-        self._use_pp_offset.setToolTip("Allow the optical center to be off-center (Lens Shift).")
+        self._use_pp_offset = QtWidgets.QCheckBox("Manual optical center override")
+        self._use_pp_offset.setToolTip(
+            "Leave disabled unless the plate was cropped, reframed, stabilized, "
+            "or shot with lens shift. Prefer 3VP Auto optical center when possible."
+        )
         self._use_pp_offset.setChecked(False)
+
+        self._manual_pp_warning = QtWidgets.QLabel(
+            "2VP manual optical center is an assumption, not a solved value. "
+            "Leave it disabled unless you know why the optical center is off-center."
+        )
+        self._manual_pp_warning.setWordWrap(True)
+        self._manual_pp_warning.setStyleSheet("color: #e4bd72;")
+        self._manual_pp_warning.setVisible(False)
+
+        self._advanced_group = QtWidgets.QGroupBox("Advanced")
+        advanced_layout = QtWidgets.QVBoxLayout(self._advanced_group)
+        advanced_layout.setContentsMargins(8, 6, 8, 8)
+        advanced_layout.addWidget(self._use_pp_offset)
+        advanced_layout.addWidget(self._manual_pp_warning)
 
         self._flip_world_up = QtWidgets.QCheckBox("Flip world up (1VP only)")
         self._flip_world_up.setToolTip(
@@ -181,7 +198,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
         options.addRow("Matching Mode", self._match_type_combo)
         options.addRow("VP Axes", self._vp_axes_row)
         options.addRow("", self._auto_pp)
-        options.addRow("", self._use_pp_offset)
+        options.addRow("", self._advanced_group)
         options.addRow("", self._flip_world_up)
 
         self._sensor_width_row = QtWidgets.QWidget()
@@ -349,6 +366,7 @@ class SceneSolverPanel(QtWidgets.QWidget):
     def _on_pp_offset_toggled(self) -> None:
         mode = self._get_current_mode()
         show_pp = self._use_pp_offset.isChecked()
+        self._manual_pp_warning.setVisible(mode == "2vp" and show_pp)
         # Hide PP crosshair if it's being auto-calculated so the user isn't confused
         if mode == "3vp" and self._auto_pp.isChecked():
             show_pp = False

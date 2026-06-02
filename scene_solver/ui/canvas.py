@@ -314,7 +314,9 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
             self._handles["principal_point"] = self._create_handle(
                 DEFAULT_POSITIONS["principal_point"], "#ffffff"
             )
-            self._handles["principal_point"].setToolTip("Principal Point (Optical Center)")
+            self._handles["principal_point"].setToolTip(
+                "Optical center (Principal Point): usually the image center"
+            )
             self._create_principal_point_crosshair()
 
             self._create_segment(
@@ -384,7 +386,7 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         self._scene.addItem(self._origin_label)
         
         # Add Principal Point label
-        self._pp_label = QtWidgets.QGraphicsSimpleTextItem("Principal Point")
+        self._pp_label = QtWidgets.QGraphicsSimpleTextItem("Optical center (PP)")
         self._pp_label.setBrush(QtGui.QBrush(QtGui.QColor("#ffffff")))
         self._pp_label.setFlag(QtWidgets.QGraphicsItem.ItemIgnoresTransformations)
         self._pp_label.setZValue(4.0)
