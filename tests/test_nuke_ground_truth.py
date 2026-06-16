@@ -135,7 +135,7 @@ def test_vp_mode_recovers_real_nuke_camera_without_flip():
     result = solve_2vp(SolveInput(
         image_width=_DIMS.width, image_height=_DIMS.height,
         vp1_segments=vp_x, vp2_segments=vp_z,
-        first_axis="X", second_axis="Z",
+        first_axis="X", second_axis="-Z",
         sensor_width_mm=_SENSOR_WIDTH_MM,
         origin=_project(Vector3D(0, 0, 0)),
     ))
@@ -160,7 +160,7 @@ def test_world_origin_projects_to_the_canvas_origin_marker():
     result = solve_2vp(SolveInput(
         image_width=_DIMS.width, image_height=_DIMS.height,
         vp1_segments=vp_x, vp2_segments=vp_z,
-        first_axis="X", second_axis="Z",
+        first_axis="X", second_axis="-Z",
         sensor_width_mm=_SENSOR_WIDTH_MM, origin=origin_ui,
     ))
     assert result.ok

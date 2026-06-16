@@ -20,20 +20,31 @@ def test_axis_letter_migrates_signed_saved_state():
     assert axis_letter("Z") == "Z"
 
 
-def test_arrow_points_from_start_to_end():
+def test_arrow_points_toward_vp_when_positive_and_segment_points_toward_vp():
     start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
-    heading = axis_arrow_heading(start, end)
+    vp = Point2D(100.0, 0.0)
+    heading = axis_arrow_heading(start, end, vp, positive=True)
     assert heading is not None
     assert heading.x > 0.9 and abs(heading.y) < 1e-9
 
 
-def test_arrow_follows_segment_after_edit():
-    start, end = Point2D(10.0, 0.0), Point2D(0.0, 0.0)
-    heading = axis_arrow_heading(start, end)
+def test_arrow_points_away_from_vp_when_negative_and_segment_points_toward_vp():
+    start, end = Point2D(0.0, 0.0), Point2D(10.0, 0.0)
+    vp = Point2D(100.0, 0.0)
+    heading = axis_arrow_heading(start, end, vp, positive=False)
     assert heading is not None
-    assert heading.x < -0.9
+    assert heading.x < -0.9 and abs(heading.y) < 1e-9
+
+
+def test_arrow_points_toward_vp_when_positive_and_segment_points_away_from_vp():
+    start, end = Point2D(10.0, 0.0), Point2D(0.0, 0.0)
+    vp = Point2D(100.0, 0.0)
+    heading = axis_arrow_heading(start, end, vp, positive=True)
+    assert heading is not None
+    assert heading.x > 0.9 and abs(heading.y) < 1e-9
 
 
 def test_degenerate_zero_length_line_returns_none():
     p = Point2D(5.0, 5.0)
-    assert axis_arrow_heading(p, p) is None
+    assert axis_arrow_heading(p, p, p, positive=True) is None
+

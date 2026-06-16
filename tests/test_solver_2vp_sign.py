@@ -27,25 +27,24 @@ def _base_input(vp1, vp2):
     )
 
 
-def test_reversing_all_drawn_directions_flips_camera_orientation():
+def test_reversing_all_drawn_directions_does_not_flip_camera_orientation():
     vp1 = (_segment(0.10, 0.40, 0.50, 0.45), _segment(0.10, 0.60, 0.50, 0.55))
     vp2 = (_segment(0.90, 0.40, 0.50, 0.45), _segment(0.90, 0.60, 0.50, 0.55))
-    forward = solve_2vp(_base_input(vp1, vp2))
+    inp = _base_input(vp1, vp2)
+    forward = solve_2vp(inp)
     reversed_vp1 = tuple(Segment2D(s.end, s.start) for s in vp1)
-    flipped = solve_2vp(_base_input(reversed_vp1, vp2))
+    flipped = solve_2vp(dataclasses.replace(inp, vp1_segments=reversed_vp1))
     assert forward.ok and flipped.ok
-    assert forward.camera_to_world_matrix != flipped.camera_to_world_matrix
+    for r1, r2 in zip(forward.camera_to_world_matrix.rows, flipped.camera_to_world_matrix.rows):
+        assert r1 == pytest.approx(r2, abs=1e-12)
 
 
-def test_one_opposing_line_in_a_vp_group_is_rejected():
+def test_one_opposing_line_in_a_vp_group_is_accepted():
     vp1 = (_segment(0.10, 0.40, 0.50, 0.45), _segment(0.10, 0.60, 0.50, 0.55))
     vp2 = (_segment(0.90, 0.40, 0.50, 0.45), _segment(0.90, 0.60, 0.50, 0.55))
     inconsistent_vp1 = (vp1[0], Segment2D(vp1[1].end, vp1[1].start))
     result = solve_2vp(_base_input(inconsistent_vp1, vp2))
-    assert not result.ok
-    assert result.errors == (
-        "The X VP lines must use a consistent direction.",
-    )
+    assert result.ok
 
 
 def test_changing_dropdown_letter_changes_camera_orientation():
@@ -115,7 +114,7 @@ def test_3vp_rejects_third_axis_that_breaks_nuke_right_handed_frame():
     result = solve_2vp(dataclasses.replace(_base_input(vp1, vp2), mode="3vp", third_axis="Z"))
     assert not result.ok
     assert result.errors == (
-        "The third VP axis must be Y for a right-handed Nuke coordinate system.",
+        "The third VP axis must be +Y for a right-handed Nuke coordinate system.",
     )
 
 
@@ -159,7 +158,7 @@ def test_3vp_parallel_y_lines_recover_the_constrained_principal_point_component(
     assert result.relative_focal_length == pytest.approx(2.0)
 
 
-def test_3vp_rejects_opposing_parallel_y_directions():
+def test_3vp_accepts_opposing_parallel_y_directions():
     vp1 = (_segment(0.10, 0.40, 0.50, 0.45), _segment(0.10, 0.60, 0.50, 0.55))
     vp2 = (_segment(0.50, 0.45, 0.90, 0.40), _segment(0.50, 0.55, 0.90, 0.60))
     vp3 = (_segment(0.40, 0.80, 0.40, 0.20), _segment(0.60, 0.20, 0.60, 0.80))
@@ -171,10 +170,7 @@ def test_3vp_rejects_opposing_parallel_y_directions():
             vp3_segments=vp3,
         )
     )
-    assert not result.ok
-    assert result.errors == (
-        "The Y VP lines point opposite to the solved Nuke axis direction.",
-    )
+    assert result.ok
 
 
 def test_3vp_accepts_finite_vp_between_consistently_oriented_segments():

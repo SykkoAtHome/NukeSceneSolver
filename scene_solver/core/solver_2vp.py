@@ -118,25 +118,19 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
         dimensions = ImageDimensions(solve_input.image_width, solve_input.image_height)
         _validate_scalar("Sensor width", solve_input.sensor_width_mm)
         _validate_scalar("Camera distance", solve_input.camera_distance)
-        preserve_sign = solve_input.mode == "box"
-        first_axis_name = signed_world_axis_name(solve_input.first_axis, preserve_sign=preserve_sign)
-        second_axis_name = signed_world_axis_name(solve_input.second_axis, preserve_sign=preserve_sign)
+        first_axis_name = signed_world_axis_name(solve_input.first_axis, preserve_sign=True)
+        second_axis_name = signed_world_axis_name(solve_input.second_axis, preserve_sign=True)
 
         if solve_input.mode == "1vp":
             return _solve_1vp(solve_input, dimensions)
 
         if world_axis_index(first_axis_name) == world_axis_index(second_axis_name):
             raise GeometryError("The two vanishing points must map to different world axes.")
-        third_axis_letter: str | None = None
         if solve_input.mode == "3vp":
-            expected_third_axis_letter = normalized_world_axis_name(missing_world_axis(
-                first_axis_name,
-                second_axis_name,
-            ))
-            third_axis_letter = normalized_world_axis_name(solve_input.third_axis)
-            if third_axis_letter != expected_third_axis_letter:
+            expected_third_axis = missing_world_axis(first_axis_name, second_axis_name)
+            if signed_world_axis_name(solve_input.third_axis) != expected_third_axis:
                 raise GeometryError(
-                    f"The third VP axis must be {expected_third_axis_letter} "
+                    f"The third VP axis must be {expected_third_axis} "
                     "for a right-handed Nuke coordinate system."
                 )
 
@@ -166,19 +160,6 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             dimensions,
             principal_point,
         )
-        # Box mode keeps the signed names derived above (preserve_sign=True);
-        # line modes re-derive the orientation from the drawn segment direction.
-        if solve_input.mode != "box":
-            first_axis_name = _axis_oriented_by_segments(
-                solve_input.first_axis,
-                solve_input.vp1_segments,
-                solver_to_ui(first_vp_solver, dimensions, principal_point),
-            )
-            second_axis_name = _axis_oriented_by_segments(
-                solve_input.second_axis,
-                solve_input.vp2_segments,
-                solver_to_ui(second_vp_solver, dimensions, principal_point),
-            )
         first_axis = parse_world_axis(first_axis_name)
         second_axis = parse_world_axis(second_axis_name)
 
@@ -245,9 +226,9 @@ def solve_2vp(solve_input: SolveInput) -> SolveResult:
             third_vp_ui = None
             warnings.append("The third vanishing point is at infinity.")
         if solve_input.mode == "3vp":
-            assert third_axis_letter is not None
+            assert solve_input.third_axis is not None
             _validate_third_axis_segments(
-                third_axis_letter,
+                solve_input.third_axis,
                 solve_input.vp3_segments,
                 dimensions=dimensions,
                 principal_point=principal_point,
@@ -286,11 +267,7 @@ def _solve_1vp(solve_input: SolveInput, dimensions: ImageDimensions) -> SolveRes
     
     first_vp_solver = _intersect_ui_segments(solve_input.vp1_segments, dimensions, principal_point)
     first_camera_direction = solver_point_to_camera_ray(first_vp_solver, focal_plane_distance)
-    first_axis_name = _axis_oriented_by_segments(
-        solve_input.first_axis,
-        solve_input.vp1_segments,
-        solver_to_ui(first_vp_solver, dimensions, principal_point),
-    )
+    first_axis_name = signed_world_axis_name(solve_input.first_axis, preserve_sign=True)
     first_axis = parse_world_axis(first_axis_name)
     if first_axis[0] == 1:
         raise GeometryError(
@@ -420,35 +397,6 @@ def _validate_scalar(name: str, value: float) -> None:
         raise GeometryError(f"{name} must be a finite positive value.")
 
 
-def _axis_oriented_by_segments(
-    axis: str,
-    segments: tuple[Segment2D, ...],
-    vanishing_point: Point2D,
-) -> str:
-    """Resolve the signed world axis from consistent directed VP lines."""
-    letter = normalized_world_axis_name(axis)
-    orientation: bool | None = None
-    for segment in segments:
-        try:
-            direction = segment.direction().normalized()
-            to_vanishing_point = (vanishing_point - segment.start).normalized()
-        except GeometryError as error:
-            raise GeometryError(f"The {letter} VP lines must have a visible direction.") from error
-        score = direction.dot(to_vanishing_point)
-        if abs(score) <= DEFAULT_TOLERANCE:
-            raise GeometryError(
-                f"The {letter} VP lines must have a clear direction."
-            )
-        points_toward_vp = score > 0.0
-        if orientation is not None and points_toward_vp != orientation:
-            raise GeometryError(
-                f"The {letter} VP lines must use a consistent direction."
-            )
-        orientation = points_toward_vp
-    if orientation is None:
-        raise GeometryError(f"The {letter} VP lines must be marked.")
-    return f"{'+' if orientation else '-'}{letter}"
-
 
 def _validate_third_axis_segments(
     axis: str,
@@ -491,11 +439,7 @@ def _validate_third_axis_segments(
         except GeometryError as error:
             raise GeometryError(f"The {letter} VP lines must have a visible direction.") from error
 
-        alignment = heading.dot(desired_heading)
-        if alignment <= DEFAULT_TOLERANCE:
-            raise GeometryError(
-                f"The {letter} VP lines point opposite to the solved Nuke axis direction."
-            )
+        alignment = abs(heading.dot(desired_heading))
         if alignment < 0.995:
             raise GeometryError(
                 f"The {letter} VP lines do not align with the solved Nuke axis direction."

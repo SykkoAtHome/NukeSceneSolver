@@ -27,14 +27,24 @@ def axis_letter(axis: str) -> str:
 def axis_arrow_heading(
     start: Point2D,
     end: Point2D,
+    vanishing_point: Point2D,
+    positive: bool,
 ) -> Vector2D | None:
-    """Resolve the stable arrow heading for one directed VP line.
+    """Resolve the passive arrow heading for a VP line pointing toward +axis.
 
-    The stored handle order is the source of truth: the arrow points from start
-    to end. Moving another VP segment cannot flip it. Returns None for a
-    zero-length line.
+    The arrowhead points toward the vanishing point if positive is True, and
+    away from it if positive is False.
     """
     direction = end - start
     if direction.length() <= 1e-9:
         return None
-    return direction.normalized()
+    u = direction.normalized()
+    to_vp = vanishing_point - start
+    points_toward_vp = u.dot(to_vp) >= 0.0
+
+    if positive == points_toward_vp:
+        return u
+    else:
+        return u * -1.0
+
+
