@@ -6,8 +6,27 @@ import copy
 
 from scene_solver.core.geometry import line_intersection_least_squares
 from scene_solver.core.models import Point2D, Segment2D
-from scene_solver.core.solver_2vp import SolveInput, _axis_oriented_by_segments, solve_2vp
+from scene_solver.core.solver_2vp import SolveInput, solve_2vp
 from scene_solver.ui.state_migration import migrate_legacy_canvas_directions
+
+
+def _axis_oriented_by_segments(
+    axis: str,
+    segments: tuple[Segment2D, ...],
+    vanishing_point: Point2D,
+) -> str:
+    """Resolve the signed world axis from consistent directed VP lines."""
+    orientation: bool | None = None
+    for segment in segments:
+        direction = segment.direction().normalized()
+        to_vanishing_point = (vanishing_point - segment.start).normalized()
+        score = direction.dot(to_vanishing_point)
+        points_toward_vp = score > 0.0
+        if orientation is not None and points_toward_vp != orientation:
+            raise ValueError("Inconsistent directions")
+        orientation = points_toward_vp
+    return f"{'+' if orientation else '-'}{axis}"
+
 
 
 def _point(x: float, y: float) -> dict[str, float]:

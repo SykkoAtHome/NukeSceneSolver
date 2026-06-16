@@ -397,35 +397,6 @@ def _validate_scalar(name: str, value: float) -> None:
         raise GeometryError(f"{name} must be a finite positive value.")
 
 
-def _axis_oriented_by_segments(
-    axis: str,
-    segments: tuple[Segment2D, ...],
-    vanishing_point: Point2D,
-) -> str:
-    """Resolve the signed world axis from consistent directed VP lines."""
-    letter = normalized_world_axis_name(axis)
-    orientation: bool | None = None
-    for segment in segments:
-        try:
-            direction = segment.direction().normalized()
-            to_vanishing_point = (vanishing_point - segment.start).normalized()
-        except GeometryError as error:
-            raise GeometryError(f"The {letter} VP lines must have a visible direction.") from error
-        score = direction.dot(to_vanishing_point)
-        if abs(score) <= DEFAULT_TOLERANCE:
-            raise GeometryError(
-                f"The {letter} VP lines must have a clear direction."
-            )
-        points_toward_vp = score > 0.0
-        if orientation is not None and points_toward_vp != orientation:
-            raise GeometryError(
-                f"The {letter} VP lines must use a consistent direction."
-            )
-        orientation = points_toward_vp
-    if orientation is None:
-        raise GeometryError(f"The {letter} VP lines must be marked.")
-    return f"{'+' if orientation else '-'}{letter}"
-
 
 def _validate_third_axis_segments(
     axis: str,
