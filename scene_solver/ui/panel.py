@@ -39,12 +39,13 @@ from scene_solver.nuke_integration import (
     save_state,
     update_camera,
 )
+from scene_solver.core.axes import signed_world_axis_name
 from scene_solver.ui.axis_display import axis_letter
 from scene_solver.ui.canvas import SceneSolverCanvas
 from scene_solver.ui.state_migration import migrate_legacy_canvas_directions
 
 
-AXES = ("X", "Y", "Z")
+AXES = ("+X", "-X", "+Y", "-Y", "+Z", "-Z")
 ARBITRARY_SCALE_MODE = "Arbitrary camera distance"
 BOX_DIMENSION_SCALE_MODE = "Estimated match-box dimension"
 DIRECTED_VP_LINES_STATE_VERSION = 1
@@ -101,18 +102,19 @@ class SceneSolverPanel(QtWidgets.QWidget):
         self._vp1_enable.setEnabled(False) # Always at least 1 VP
         self._first_axis = QtWidgets.QComboBox()
         self._first_axis.addItems(AXES)
+        self._first_axis.setCurrentText("+X")
         
         self._vp2_enable = QtWidgets.QCheckBox("Second VP axis")
         self._vp2_enable.setChecked(True)
         self._second_axis = QtWidgets.QComboBox()
         self._second_axis.addItems(AXES)
-        self._second_axis.setCurrentText("Z")
+        self._second_axis.setCurrentText("+Z")
         
         self._vp3_enable = QtWidgets.QCheckBox("Third VP axis")
         self._vp3_enable.setChecked(False)
         self._third_axis = QtWidgets.QComboBox()
         self._third_axis.addItems(AXES)
-        self._third_axis.setCurrentText("Y")
+        self._third_axis.setCurrentText("+Y")
         
         self._auto_pp = QtWidgets.QCheckBox("Auto optical center (PP, 3VP only)")
         self._auto_pp.setChecked(True)
@@ -628,11 +630,11 @@ class SceneSolverPanel(QtWidgets.QWidget):
                     self._vp3_enable.setChecked(True)
 
             if "first_axis" in state:
-                self._first_axis.setCurrentText(axis_letter(state["first_axis"]))
+                self._first_axis.setCurrentText(signed_world_axis_name(state["first_axis"], preserve_sign=True))
             if "second_axis" in state:
-                self._second_axis.setCurrentText(axis_letter(state["second_axis"]))
+                self._second_axis.setCurrentText(signed_world_axis_name(state["second_axis"], preserve_sign=True))
             if "third_axis" in state:
-                self._third_axis.setCurrentText(axis_letter(state["third_axis"]))
+                self._third_axis.setCurrentText(signed_world_axis_name(state["third_axis"], preserve_sign=True))
             if "auto_pp" in state:
                 self._auto_pp.setChecked(state["auto_pp"])
             if "use_pp_offset" in state:

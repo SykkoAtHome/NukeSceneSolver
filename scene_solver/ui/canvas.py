@@ -18,6 +18,7 @@ from scene_solver.core.coordinates import solver_to_ui
 from scene_solver.core.models import Point2D, Segment2D
 from scene_solver.core.projection import world_plane_horizon_solver_line
 from scene_solver.ui.axis_display import AXIS_COLORS, axis_arrow_heading, axis_color
+from scene_solver.core.geometry import line_intersection_least_squares
 from scene_solver.ui.snapping import nearest_snap_target
 
 
@@ -1156,6 +1157,20 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         item.setPolygon(QtGui.QPolygonF([QtCore.QPointF(tip), barb1, barb2]))
         item.setVisible(True)
 
+    def _relative_to_scene(self, point: Point2D) -> QtCore.QPointF:
+        return QtCore.QPointF(
+            self._plate_rect.left() + point.x * self._plate_rect.width(),
+            self._plate_rect.top() + point.y * self._plate_rect.height(),
+        )
+
+    def _group_vanishing_point(self, prefix: str) -> Point2D | None:
+        try:
+            # prefix is like "vp1", "vp2", "vp3"
+            segments = self._segments(f"{prefix}_a", f"{prefix}_b")
+            return line_intersection_least_squares(segments)
+        except GeometryError:
+            return None
+
     def _set_axis_arrow(
         self,
         name: str,
@@ -1164,14 +1179,41 @@ class SceneSolverCanvas(QtWidgets.QGraphicsView):
         p2: QtCore.QPointF,
         inv_scale: float,
     ) -> None:
-        """Point the arrow from the line's start handle toward its end handle."""
-        start = Point2D(p1.x(), p1.y())
-        end = Point2D(p2.x(), p2.y())
-        heading = axis_arrow_heading(start, end)
-        if heading is None:
+        """Point the arrow toward the positive direction of the assigned axis."""
+        start_rel = self._handles[f"{name}_start"].relative_position()
+        end_rel = self._handles[f"{name}_end"].relative_position()
+        prefix = name[:3]
+        vp_rel = self._group_vanishing_point(prefix)
+        
+        axis = "+X"
+        if self._last_axis_label_state is not None:
+            if prefix == "vp1":
+                axis = self._last_axis_label_state[0]
+            elif prefix == "vp2":
+                axis = self._last_axis_label_state[1]
+            elif prefix == "vp3":
+                axis = self._last_axis_label_state[2]
+        positive = not axis.startswith("-")
+
+        heading = axis_arrow_heading(start_rel, end_rel, vp_rel, positive) if vp_rel is not None else None
+        
+        dx = p2.x() - p1.x()
+        dy = p2.y() - p1.y()
+        length = (dx*dx + dy*dy)**0.5
+        if length <= 1e-9:
             self._hide_arrow(name)
             return
-        self._set_arrow_head(name, second_tip, heading.x, heading.y, 1.0, inv_scale)
+            
+        if heading is not None:
+            drawn_dir = end_rel - start_rel
+            flip = (heading.x * drawn_dir.x + heading.y * drawn_dir.y) < 0.0
+            if flip:
+                dx, dy = -dx, -dy
+        else:
+            if not positive:
+                dx, dy = -dx, -dy
+                
+        self._set_arrow_head(name, second_tip, dx, dy, length, inv_scale)
 
     def _handle_moved(self) -> None:
         if not self._is_internal_update:
